@@ -65,6 +65,7 @@ Each job supports:
 | `group`   | `string`   | Optional group name — jobs in the same group are visually grouped.       |
 | `needs`   | `string[]` | IDs of jobs that must complete before this one starts.                   |
 | `if`      | `string`   | When to run: `success` (default), `failure`, or `always`.               |
+| `restart` | `bool`     | Whether to kill and re-launch on restart. Defaults to `true`.           |
 
 ## CLI Flags
 

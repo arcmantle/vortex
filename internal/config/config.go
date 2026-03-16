@@ -47,6 +47,16 @@ type JobSpec struct {
 	// "failure": run only if any need failed.
 	// "always": run regardless of need outcomes.
 	If string `yaml:"if"`
+	// Restart controls whether the job is killed and re-launched on restart.
+	// Defaults to true. Set to false for long-running processes (e.g. dev
+	// servers) that should survive across config reloads.
+	Restart *bool `yaml:"restart"`
+}
+
+// ShouldRestart returns whether this job should be killed and re-launched on
+// restart. Defaults to true when the field is not set.
+func (j JobSpec) ShouldRestart() bool {
+	return j.Restart == nil || *j.Restart
 }
 
 // Config is the top-level structure of a vortex.yaml file.

@@ -132,9 +132,19 @@ func (o *Orchestrator) Start(ctx context.Context) {
 }
 
 func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
+	// Skip jobs that are already running (persistent jobs carried over from
+	// a previous generation).
+	if job.Status() == StatusRunning {
+		return
+	}
+
 	// Wait for all dependencies to reach a terminal state.
+	// Persistent running jobs (restart: false) are treated as satisfied.
 	for _, needID := range job.Spec.Needs {
 		dep := o.jobs[needID]
+		if !dep.Spec.ShouldRestart() && dep.Status() == StatusRunning {
+			continue // persistent job still running — treat as satisfied
+		}
 		select {
 		case <-dep.Done():
 		case <-ctx.Done():
@@ -208,7 +218,12 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 
 func (o *Orchestrator) allSucceeded(needs []string) bool {
 	for _, id := range needs {
-		if o.jobs[id].Status() != StatusSuccess {
+		j := o.jobs[id]
+		// Persistent running jobs count as succeeded for dependency purposes.
+		if !j.Spec.ShouldRestart() && j.Status() == StatusRunning {
+			continue
+		}
+		if j.Status() != StatusSuccess {
 			return false
 		}
 	}
@@ -217,7 +232,11 @@ func (o *Orchestrator) allSucceeded(needs []string) bool {
 
 func (o *Orchestrator) anyFailed(needs []string) bool {
 	for _, id := range needs {
-		if o.jobs[id].Status() == StatusFailure {
+		j := o.jobs[id]
+		if !j.Spec.ShouldRestart() && j.Status() == StatusRunning {
+			continue
+		}
+		if j.Status() == StatusFailure {
 			return true
 		}
 	}
@@ -282,27 +301,30 @@ func (o *Orchestrator) AddAndStart(ctx context.Context, id, label, command strin
 func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.mu.Lock()
 
-	// 1. Kill every running process.
+	// 1. Kill running processes — but only for jobs that should restart.
+	//    Persistent jobs (restart: false) keep running.
+	var toWait []<-chan struct{}
+	persistent := make(map[string]*Job) // old jobs to carry forward
 	for _, id := range o.order {
 		job := o.jobs[id]
+		if !job.Spec.ShouldRestart() {
+			persistent[id] = job
+			continue
+		}
 		if term := job.Terminal(); term != nil {
 			term.Kill()
 		}
-	}
-	// Wait for all to reach terminal state (under unlock so drain goroutines
-	// can acquire the job mutex).
-	doneChans := make([]<-chan struct{}, 0, len(o.order))
-	for _, id := range o.order {
-		doneChans = append(doneChans, o.jobs[id].Done())
+		toWait = append(toWait, job.Done())
 	}
 	o.mu.Unlock()
 
-	for _, ch := range doneChans {
+	// Wait for killed jobs to reach terminal state.
+	for _, ch := range toWait {
 		<-ch
 	}
 
-	// 2. Rebuild the job graph from the new config, keeping the same procMgr
-	//    so new processes inherit old output buffers.
+	// 2. Rebuild the job graph. Persistent jobs that still exist in the new
+	//    config are carried over; everything else gets a fresh Job.
 	o.mu.Lock()
 	newJobs := make(map[string]*Job, len(cfg.Jobs))
 	newOrder := make([]string, 0, len(cfg.Jobs))
@@ -312,7 +334,13 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 			label = spec.ID
 		}
 		spec.Label = label
-		newJobs[spec.ID] = newJob(spec)
+
+		if old, ok := persistent[spec.ID]; ok && !spec.ShouldRestart() {
+			// Carry forward the running job as-is.
+			newJobs[spec.ID] = old
+		} else {
+			newJobs[spec.ID] = newJob(spec)
+		}
 		newOrder = append(newOrder, spec.ID)
 	}
 	o.jobs = newJobs
@@ -324,7 +352,9 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.gen++
 	o.mu.Unlock()
 
-	// 3. Start the new dependency graph.
+	// 3. Start the new dependency graph. Persistent jobs that are already
+	//    running will be skipped by runJob (their done channel is not closed
+	//    until they actually exit).
 	log.Printf("[orchestrator] restarting with %d jobs", len(cfg.Jobs))
 	o.Start(ctx)
 }

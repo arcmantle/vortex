@@ -28,3 +28,4 @@ jobs:
     command: pnpm --dir mock/vite-app dev
     group: run
     needs: [build-server-a, build-server-b]
+    restart: false
