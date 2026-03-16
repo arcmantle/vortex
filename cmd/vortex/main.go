@@ -46,7 +46,6 @@ func main() {
 	dev := flag.Bool("dev", false, "dev mode: skip webview, keep API server running")
 	port := flag.Int("port", 7370, "HTTP port for the Go server")
 	configFile := flag.String("config", "", "path to YAML config file")
-	detached := flag.Bool("detached", false, "internal: already running detached from terminal")
 	flag.Parse()
 
 	args := flag.Args()
@@ -63,14 +62,6 @@ func main() {
 		}
 		fmt.Println("Forwarded to existing instance.")
 		os.Exit(0)
-	}
-
-	// In non-dev mode, re-launch as a detached process so the calling
-	// terminal is freed immediately. The child inherits the instance lock.
-	if !*dev && !*detached {
-		l.Close()
-		relaunchDetached()
-		return
 	}
 	defer l.Close()
 

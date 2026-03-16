@@ -13,7 +13,7 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 - **Native webview** — opens as a standalone desktop window (Edge WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux)
 - **Job groups** — organize related jobs under collapsible groups in the UI
 - **Single-instance** — launching vortex while it's already running forwards the new config to the existing instance, which restarts with the new job graph
-- **Detached execution** — the launching terminal is freed immediately; vortex runs in the background
+- **Persistent jobs** — mark long-running jobs with `restart: false` to keep them alive across config reloads
 - **Embedded UI** — production builds embed the frontend into the Go binary (zero external files)
 
 ## Quick Start
@@ -110,6 +110,12 @@ pnpm install
 pnpm build
 
 # Build the Go binary with embedded UI
+go build -tags embed_ui -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
+```
+
+On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. On macOS/Linux, omit that flag:
+
+```sh
 go build -tags embed_ui -o vortex ./cmd/vortex
 ```
 
@@ -118,7 +124,7 @@ The `embed_ui` build tag embeds the compiled frontend into the binary. Without i
 ## Architecture
 
 ```
-cmd/vortex/          CLI entry point, detach logic, UI embedding
+cmd/vortex/          CLI entry point, UI embedding
 cmd/vortex-ui/web/   Lit + TypeScript frontend (xterm.js terminals)
 internal/
   config/            YAML config loading and validation
