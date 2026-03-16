@@ -46,6 +46,7 @@ func main() {
 	dev := flag.Bool("dev", false, "dev mode: skip webview, keep API server running")
 	port := flag.Int("port", 7370, "HTTP port for the Go server")
 	configFile := flag.String("config", "", "path to YAML config file")
+	forked := flag.Bool("forked", false, "internal: already running in a detached session")
 	flag.Parse()
 
 	args := flag.Args()
@@ -62,6 +63,15 @@ func main() {
 		}
 		fmt.Println("Forwarded to existing instance.")
 		os.Exit(0)
+	}
+
+	// On macOS/Linux, fork into a new session so the terminal is freed.
+	// On Windows this is a no-op (handled by -H=windowsgui at build time).
+	if !*dev && !*forked {
+		if maybeFork() {
+			l.Close()
+			return
+		}
 	}
 	defer l.Close()
 
