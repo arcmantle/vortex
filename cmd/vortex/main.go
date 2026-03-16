@@ -42,6 +42,13 @@ import (
 	"arcmantle/vortex/internal/webview"
 )
 
+// Version info, set via ldflags at build time.
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	GitCommit = "unknown"
+)
+
 func main() {
 	dev := flag.Bool("dev", false, "dev mode: skip webview, keep API server running")
 	port := flag.Int("port", 7370, "HTTP port for the Go server")

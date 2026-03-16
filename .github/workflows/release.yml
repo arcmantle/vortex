@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.24"
+  NODE_VERSION: "22"
+
+jobs:
+  # ── Build the frontend UI and upload as artifact ──────────────────────
+  build-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: cmd/vortex-ui/web/pnpm-lock.yaml
+
+      - name: Install & build frontend
+        working-directory: cmd/vortex-ui/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: cmd/vortex/web/dist/
+          retention-days: 1
+
+  # ── Build Go binary for each platform ─────────────────────────────────
+  build:
+    needs: build-ui
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            binary: vortex-windows-amd64.exe
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            binary: vortex-linux-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            binary: vortex-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: cmd/vortex/web/dist/
+
+      # Linux: install webkit2gtk for CGO (webview dependency)
+      - name: Install Linux dependencies
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev
+
+      - name: Build
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          COMMIT="${GITHUB_SHA::8}"
+          go run build.go \
+            -os "${{ matrix.goos }}" \
+            -arch "${{ matrix.goarch }}" \
+            -version "$TAG" \
+            -commit "$COMMIT" \
+            -output "${{ matrix.binary }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: ${{ matrix.binary }}
+          retention-days: 1
+
+  # ── Create GitHub Release with all binaries ───────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: vortex-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lR artifacts/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*

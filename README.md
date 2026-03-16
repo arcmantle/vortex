@@ -93,9 +93,8 @@ vortex [flags] [config.yaml | -- label:command ...]
 ### Development
 
 ```sh
-# Start the Go server with hot-reload + Vite dev server
-# (requires Air: go install github.com/air-verse/air@latest)
-air &
+# Start the Go server + Vite dev server
+go run ./cmd/vortex --dev --port 7370 --config dev.yaml &
 cd cmd/vortex-ui/web && pnpm install && pnpm dev
 ```
 
