@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "server-a": {
+      "commandName": "Project",
+      "applicationUrl": "http://localhost:5100"
+    }
+  }
+}

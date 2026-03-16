@@ -1,0 +1,5 @@
+{
+	"evenBetterToml.schema.associations": {
+		".air.toml": "https://raw.githubusercontent.com/air-verse/air/master/air.schema.json"
+	}
+}

@@ -1,0 +1,76 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "vortex: go server (dev)",
+			"type": "shell",
+			"command": "air",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"isBackground": true,
+			"problemMatcher": {
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "listening on"
+				}
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"group": "vortex-dev"
+			}
+		},
+		{
+			"label": "vortex: vite dev server",
+			"type": "shell",
+			"command": "pnpm dev",
+			"options": {
+				"cwd": "${workspaceFolder}/cmd/vortex-ui/web"
+			},
+			"isBackground": true,
+			"problemMatcher": {
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "ready in"
+				}
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"group": "vortex-dev"
+			}
+		},
+		{
+			"label": "vortex: dev",
+			"dependsOn": [
+				"vortex: go server (dev)",
+				"vortex: vite dev server"
+			],
+			"dependsOrder": "parallel",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": []
+		}
+	]
+}
