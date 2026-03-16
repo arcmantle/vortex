@@ -51,7 +51,7 @@ jobs:
             goos: windows
             goarch: amd64
             binary: vortex-windows-amd64.exe
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             goos: linux
             goarch: amd64
             binary: vortex-linux-amd64
