@@ -270,7 +270,7 @@ pnpm build
 go build -tags embed_ui -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
 ```
 
-On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. On macOS/Linux, omit that flag:
+On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. On macOS/Linux, you can either use `build.go` or omit that flag with plain `go build`:
 
 ```sh
 go build -tags embed_ui -o vortex ./cmd/vortex

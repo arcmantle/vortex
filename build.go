@@ -52,20 +52,7 @@ func main() {
 		run(uiDir, "pnpm", "build")
 	}
 
-	// Step 2: Windows — generate .syso with icon + version metadata.
-	if *targetOS == "windows" {
-		fmt.Println("── Generating Windows resources (go-winres)")
-		ensureWinres()
-		run(".", "go-winres", "make",
-			"--in", "winres/winres.json",
-			"--out", filepath.Join("cmd", "vortex", "rsrc"),
-			"--product-version", *version,
-			"--file-version", *version,
-			"--arch", *targetArch,
-		)
-	}
-
-	// Step 3: compile.
+	// Step 2: compile.
 	fmt.Println("── Compiling")
 	now := time.Now().UTC().Format(time.RFC3339)
 	ldflags := strings.Join([]string{
@@ -96,23 +83,7 @@ func main() {
 		fatal("go build failed: %v", err)
 	}
 
-	// Step 4: Windows — clean up .syso files.
-	if *targetOS == "windows" {
-		matches, _ := filepath.Glob(filepath.Join("cmd", "vortex", "*.syso"))
-		for _, m := range matches {
-			os.Remove(m)
-		}
-	}
-
 	fmt.Printf("✓ Built %s\n", *output)
-}
-
-// ensureWinres installs go-winres if it's not on PATH.
-func ensureWinres() {
-	if _, err := exec.LookPath("go-winres"); err != nil {
-		fmt.Println("  Installing go-winres...")
-		run(".", "go", "install", "github.com/tc-hib/go-winres@latest")
-	}
 }
 
 // gitCommit returns the short HEAD commit hash, or "unknown".
