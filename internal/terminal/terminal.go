@@ -1,58 +1,111 @@
 // Package terminal manages terminals — persistent output containers that host
-// transient child processes. Each terminal accumulates output lines in a ring
-// buffer and supports live subscriptions via channels.
+// transient child processes. Each terminal accumulates raw output chunks in a
+// bounded buffer and supports live subscriptions via channels.
 package terminal
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
 
-// maxBufferedLines is the maximum number of output lines kept per terminal.
-// Older lines are discarded as new ones arrive.
-const maxBufferedLines = 10_000
+const (
+	// maxBufferedChunks bounds the number of buffered writes retained per terminal.
+	maxBufferedChunks = 4_096
+	// maxBufferedBytes bounds the total retained terminal output.
+	maxBufferedBytes = 4 << 20
+)
 
-// Line is a single line of output.
-type Line struct {
+// OutputChunk is a timestamped slice of terminal output bytes.
+type OutputChunk struct {
 	T    time.Time
-	Text string
+	Data []byte
 }
 
-// ringLine is a fixed-capacity circular buffer of Lines.
-type ringLine struct {
-	data []Line
-	head int // index of oldest element
-	size int
+type outputBuffer struct {
+	chunks     []OutputChunk
+	totalBytes int
 }
 
-func newRingLine(cap int) ringLine {
-	return ringLine{data: make([]Line, cap)}
-}
-
-func (r *ringLine) add(l Line) {
-	cap := len(r.data)
-	if r.size < cap {
-		r.data[(r.head+r.size)%cap] = l
-		r.size++
-	} else {
-		// buffer full: overwrite the oldest entry
-		r.data[r.head] = l
-		r.head = (r.head + 1) % cap
+func (b *outputBuffer) add(chunk OutputChunk) {
+	b.chunks = append(b.chunks, chunk)
+	b.totalBytes += len(chunk.Data)
+	for len(b.chunks) > maxBufferedChunks || b.totalBytes > maxBufferedBytes {
+		b.totalBytes -= len(b.chunks[0].Data)
+		copy(b.chunks, b.chunks[1:])
+		last := len(b.chunks) - 1
+		b.chunks[last] = OutputChunk{}
+		b.chunks = b.chunks[:last]
 	}
 }
 
-func (r *ringLine) snapshot() []Line {
-	out := make([]Line, r.size)
-	cap := len(r.data)
-	for i := 0; i < r.size; i++ {
-		out[i] = r.data[(r.head+i)%cap]
-	}
+func (b *outputBuffer) snapshot() []OutputChunk {
+	out := make([]OutputChunk, len(b.chunks))
+	copy(out, b.chunks)
 	return out
+}
+
+func (b *outputBuffer) clear() {
+	for i := range b.chunks {
+		b.chunks[i] = OutputChunk{}
+	}
+	b.chunks = nil
+	b.totalBytes = 0
+}
+
+type resizeFunc func(cols, rows uint16) error
+type inputFunc func([]byte) error
+
+type processHandle interface {
+	Wait() (int, error)
+	PID() int
+}
+
+type startedChildProcess struct {
+	stream  io.ReadCloser
+	process processHandle
+	input   inputFunc
+	resize  resizeFunc
+}
+
+type execProcess struct {
+	cmd *exec.Cmd
+}
+
+func hasEnvKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *execProcess) Wait() (int, error) {
+	err := p.cmd.Wait()
+	if p.cmd.ProcessState == nil {
+		if err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+	code := p.cmd.ProcessState.ExitCode()
+	if code < 0 {
+		code = 1
+	}
+	return code, err
+}
+
+func (p *execProcess) PID() int {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
 }
 
 // Terminal wraps a running child process and accumulates its output in a
@@ -63,15 +116,17 @@ type Terminal struct {
 	Command string
 	Args    []string
 
-	mu       sync.RWMutex
-	lineBuf  ringLine
-	subs     []chan Line
-	done     chan struct{}
-	exited   bool // set under mu when drain finishes
-	exitErr  error
-	exitCode int
-	cancel   context.CancelFunc // cancels the child-process context
-	cmd      *exec.Cmd          // kept for process-tree killing
+	mu        sync.RWMutex
+	outputBuf outputBuffer
+	subs      []chan OutputChunk
+	done      chan struct{}
+	exited    bool // set under mu when drain finishes
+	exitErr   error
+	exitCode  int
+	cancel    context.CancelFunc // cancels the child-process context
+	process   processHandle
+	input     inputFunc
+	resize    resizeFunc
 }
 
 // New creates and starts a Terminal with a child process. The process runs
@@ -83,63 +138,76 @@ func New(ctx context.Context, id, label, command string, args []string) (*Termin
 		Label:   label,
 		Command: command,
 		Args:    args,
-		lineBuf: newRingLine(maxBufferedLines),
 		done:    make(chan struct{}),
 		cancel:  cancel,
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return killProcessTree(cmd.Process.Pid)
-		}
-		return nil
-	}
-	t.cmd = cmd
-	setChildFlags(cmd)
-	stdout, err := cmd.StdoutPipe()
+	started, err := startChildProcess(cmd)
 	if err != nil {
 		return nil, err
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
+	t.process = started.process
+	t.input = started.input
+	t.resize = started.resize
 
-	go t.drain(io.MultiReader(stdout, stderr), cmd)
+	go func() {
+		select {
+		case <-ctx.Done():
+			if pid := t.PID(); pid > 0 {
+				_ = killProcessTree(pid)
+			}
+		case <-t.done:
+		}
+	}()
+
+	go t.drain(started.stream, started.process)
 	return t, nil
 }
 
-func (t *Terminal) drain(r io.Reader, cmd *exec.Cmd) {
-	sc := bufio.NewScanner(r)
-	for sc.Scan() {
-		line := Line{T: time.Now(), Text: sc.Text()}
-		t.mu.Lock()
-		t.lineBuf.add(line)
-		for _, ch := range t.subs {
-			select {
-			case ch <- line:
-			default:
+// WriteInput sends raw bytes to the child process stdin when supported.
+func (t *Terminal) WriteInput(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	t.mu.RLock()
+	input := t.input
+	exited := t.exited
+	t.mu.RUnlock()
+	if exited || input == nil {
+		return nil
+	}
+	return input(data)
+}
+
+func (t *Terminal) drain(r io.ReadCloser, proc processHandle) {
+	defer r.Close()
+
+	buf := make([]byte, 4_096)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			t.appendChunk(time.Now(), buf[:n])
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				t.appendChunk(time.Now(), []byte("\r\n\x1b[31m[stream error: "+readErr.Error()+"]\x1b[0m\r\n"))
 			}
-		}
-		t.mu.Unlock()
-	}
-	err := cmd.Wait()
-	code := 0
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			code = exitErr.ExitCode()
-		} else {
-			code = 1
+			break
 		}
 	}
+
+	code, err := proc.Wait()
 	t.mu.Lock()
-	t.lineBuf.add(Line{T: time.Now(), Text: ""})
-	t.lineBuf.add(Line{T: time.Now(), Text: "\x1b[2m[process exited]\x1b[0m"})
+	exitChunk := OutputChunk{T: time.Now(), Data: []byte("\r\n\x1b[2m[process exited]\x1b[0m\r\n")}
+	t.outputBuf.add(exitChunk)
+	for _, ch := range t.subs {
+		select {
+		case ch <- exitChunk:
+		default:
+		}
+	}
 	t.exited = true
 	t.exitErr = err
 	t.exitCode = code
@@ -151,14 +219,31 @@ func (t *Terminal) drain(r io.Reader, cmd *exec.Cmd) {
 	close(t.done)
 }
 
-// LinesAndSubscribe atomically returns a snapshot of all buffered lines and
-// registers a live subscription. Using both under the same lock prevents the
-// race where lines produced between a separate Lines() call and a separate
-// Subscribe() call would be silently dropped.
-func (t *Terminal) LinesAndSubscribe() ([]Line, <-chan Line, func()) {
-	ch := make(chan Line, 256)
+func (t *Terminal) appendChunk(ts time.Time, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+
+	chunk := OutputChunk{T: ts, Data: append([]byte(nil), data...)}
 	t.mu.Lock()
-	snapshot := t.lineBuf.snapshot()
+	t.outputBuf.add(chunk)
+	for _, ch := range t.subs {
+		select {
+		case ch <- chunk:
+		default:
+		}
+	}
+	t.mu.Unlock()
+}
+
+// OutputAndSubscribe atomically returns a snapshot of all buffered output and
+// registers a live subscription. Using both under the same lock prevents the
+// race where output produced between separate snapshot and subscribe calls
+// would be silently dropped.
+func (t *Terminal) OutputAndSubscribe() ([]OutputChunk, <-chan OutputChunk, func()) {
+	ch := make(chan OutputChunk, 256)
+	t.mu.Lock()
+	snapshot := t.outputBuf.snapshot()
 	if t.exited {
 		t.mu.Unlock()
 		close(ch)
@@ -184,18 +269,18 @@ func (t *Terminal) LinesAndSubscribe() ([]Line, <-chan Line, func()) {
 	return snapshot, ch, cancel
 }
 
-// Lines returns a snapshot of the buffered output lines (up to maxBufferedLines).
-func (t *Terminal) Lines() []Line {
+// Output returns a snapshot of the buffered output.
+func (t *Terminal) Output() []OutputChunk {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.lineBuf.snapshot()
+	return t.outputBuf.snapshot()
 }
 
-// Subscribe registers a live subscription for new lines without replaying
-// the existing buffer. Useful when the caller already has the history (e.g.
-// after a restart on the same SSE connection).
-func (t *Terminal) Subscribe() (<-chan Line, func()) {
-	ch := make(chan Line, 256)
+// Subscribe registers a live subscription for new output without replaying the
+// existing buffer. Useful when the caller already has the history (e.g. after
+// a restart on the same SSE connection).
+func (t *Terminal) Subscribe() (<-chan OutputChunk, func()) {
+	ch := make(chan OutputChunk, 256)
 	t.mu.Lock()
 	if t.exited {
 		t.mu.Unlock()
@@ -222,6 +307,22 @@ func (t *Terminal) Subscribe() (<-chan Line, func()) {
 	return ch, cancel
 }
 
+// Resize updates the child terminal dimensions when the underlying transport
+// supports it.
+func (t *Terminal) Resize(cols, rows uint16) error {
+	if cols == 0 || rows == 0 {
+		return nil
+	}
+
+	t.mu.RLock()
+	resize := t.resize
+	t.mu.RUnlock()
+	if resize == nil {
+		return nil
+	}
+	return resize(cols, rows)
+}
+
 // Done returns a channel closed when the process has exited.
 func (t *Terminal) Done() <-chan struct{} { return t.done }
 
@@ -243,23 +344,23 @@ func (t *Terminal) ExitCode() int {
 func (t *Terminal) PID() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if t.exited || t.cmd == nil || t.cmd.Process == nil {
+	if t.exited || t.process == nil {
 		return 0
 	}
-	return t.cmd.Process.Pid
+	return t.process.PID()
 }
 
 // ClearBuffer resets the output ring buffer.
 func (t *Terminal) ClearBuffer() {
 	t.mu.Lock()
-	t.lineBuf = newRingLine(maxBufferedLines)
+	t.outputBuf.clear()
 	t.mu.Unlock()
 }
 
 // Kill terminates the child process tree. It is safe to call multiple times.
 func (t *Terminal) Kill() {
-	if t.cmd != nil && t.cmd.Process != nil {
-		killProcessTree(t.cmd.Process.Pid)
+	if pid := t.PID(); pid > 0 {
+		killProcessTree(pid)
 	}
 	if t.cancel != nil {
 		t.cancel()
@@ -278,12 +379,12 @@ func KillProcessTreeByPID(pid int) error {
 // the UI preserves history across process restarts.
 func (t *Terminal) seedFrom(old *Terminal) {
 	old.mu.RLock()
-	lines := old.lineBuf.snapshot()
+	chunks := old.outputBuf.snapshot()
 	old.mu.RUnlock()
 
 	t.mu.Lock()
-	for _, l := range lines {
-		t.lineBuf.add(l)
+	for _, chunk := range chunks {
+		t.outputBuf.add(chunk)
 	}
 	t.mu.Unlock()
 }

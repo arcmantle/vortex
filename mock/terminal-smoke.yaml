@@ -1,0 +1,7 @@
+name: terminal-smoke
+
+jobs:
+  - id: terminal-smoke
+    label: Terminal Smoke
+    command: go run ./mock/terminal-smoke
+    group: smoke

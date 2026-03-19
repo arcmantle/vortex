@@ -1,3 +1,5 @@
+//go:build cgo && (darwin || linux || windows)
+
 package webview
 
 import (

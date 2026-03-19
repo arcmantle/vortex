@@ -5,12 +5,13 @@
 //	GET  /                      → serves embedded web UI (SPA fallback)
 //	GET  /api/terminals          → JSON list of all terminals
 //	GET  /api/terminals/{id}     → JSON info + buffered output for a terminal
-//	GET  /events?id=<id>         → SSE stream of a terminal's output lines
+//	GET  /events?id=<id>         → SSE stream of a terminal's output chunks
 //	POST /handoff                → single-instance handoff (args forwarding)
 package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -71,7 +72,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("DELETE /api/processes", s.handleKillProcesses)
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleKillTerminal)
+	mux.HandleFunc("POST /api/terminals/{id}/input", s.handleInputTerminal)
 	mux.HandleFunc("POST /api/terminals/{id}/rerun", s.handleRerunTerminal)
+	mux.HandleFunc("POST /api/terminals/{id}/size", s.handleResizeTerminal)
 	mux.HandleFunc("DELETE /api/terminals/{id}/buffer", s.handleClearBuffer)
 	mux.HandleFunc("POST /handoff", s.handleHandoff)
 
@@ -136,12 +139,12 @@ func (s *Server) handleListTerminals(w http.ResponseWriter, r *http.Request) {
 
 type terminalDetail struct {
 	terminalInfo
-	Lines []lineDTO `json:"lines"`
+	Chunks []outputDTO `json:"chunks"`
 }
 
-type lineDTO struct {
+type outputDTO struct {
 	T    int64  `json:"t"` // unix millis
-	Text string `json:"text"`
+	Data string `json:"data"`
 }
 
 func (s *Server) handleGetTerminal(w http.ResponseWriter, r *http.Request) {
@@ -152,18 +155,18 @@ func (s *Server) handleGetTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := jobToInfo(j)
-	var dtos []lineDTO
+	var dtos []outputDTO
 	if term := j.Terminal(); term != nil {
-		lines := term.Lines()
-		dtos = make([]lineDTO, len(lines))
-		for i, l := range lines {
-			dtos[i] = lineDTO{T: l.T.UnixMilli(), Text: l.Text}
+		chunks := term.Output()
+		dtos = make([]outputDTO, len(chunks))
+		for i, chunk := range chunks {
+			dtos[i] = outputDTO{T: chunk.T.UnixMilli(), Data: base64.StdEncoding.EncodeToString(chunk.Data)}
 		}
 	}
 	if dtos == nil {
-		dtos = []lineDTO{}
+		dtos = []outputDTO{}
 	}
-	writeJSON(w, terminalDetail{terminalInfo: info, Lines: dtos})
+	writeJSON(w, terminalDetail{terminalInfo: info, Chunks: dtos})
 }
 
 // handleEvents streams SSE output for a job identified by ?id=<id>.
@@ -233,14 +236,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 		// Stream output. On the first iteration replay the full buffer;
 		// on restarts the client already has the history so only subscribe
-		// to new lines.
-		var lines []terminal.Line
-		var ch <-chan terminal.Line
+		// to new chunks.
+		var chunks []terminal.OutputChunk
+		var ch <-chan terminal.OutputChunk
 		var cancel func()
 		if firstIteration {
-			lines, ch, cancel = term.LinesAndSubscribe()
-			for _, l := range lines {
-				writeSSELine(w, l.Text, l.T)
+			chunks, ch, cancel = term.OutputAndSubscribe()
+			for _, chunk := range chunks {
+				writeSSEChunk(w, chunk)
 			}
 			flusher.Flush()
 			firstIteration = false
@@ -273,7 +276,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 					}
 					streaming = false
 				} else {
-					writeSSELine(w, line.Text, line.T)
+					writeSSEChunk(w, line)
 					flusher.Flush()
 				}
 			}
@@ -281,9 +284,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeSSELine(w http.ResponseWriter, text string, t time.Time) {
-	data, _ := json.Marshal(lineDTO{T: t.UnixMilli(), Text: text})
+func writeSSEChunk(w http.ResponseWriter, chunk terminal.OutputChunk) {
+	data, _ := json.Marshal(outputDTO{T: chunk.T.UnixMilli(), Data: base64.StdEncoding.EncodeToString(chunk.Data)})
 	fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+type resizeTerminalRequest struct {
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
+}
+
+type terminalInputRequest struct {
+	Data string `json:"data"`
 }
 
 func (s *Server) handleKillProcesses(w http.ResponseWriter, r *http.Request) {
@@ -353,6 +365,61 @@ func (s *Server) handleRerunTerminal(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleInputTerminal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	j, ok := s.orch.GetJob(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	term := j.Terminal()
+	if term == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	var req terminalInputRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(req.Data)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := term.WriteInput(data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleResizeTerminal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	j, ok := s.orch.GetJob(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	term := j.Terminal()
+	if term == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	var req resizeTerminalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := term.Resize(req.Cols, req.Rows); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

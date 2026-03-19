@@ -15,7 +15,7 @@ export interface TerminalInfo {
 
 export interface LineDTO {
 	t: number;
-	text: string;
+	data: string;
 }
 
 // Always use relative URLs so Vite's proxy (in dev) or the embedded server (in prod)
@@ -58,6 +58,8 @@ export class VortexTerminal extends LitElement {
 	private _fitAddon?: FitAddon;
 	private _sse?: EventSource;
 	private _ro?: ResizeObserver;
+	private _inputDisposable?: { dispose(): void; };
+	private _lastReportedSize = '';
 
 	protected firstUpdated(): void {
 		const wrap = this.shadowRoot!.querySelector('.term-wrap') as HTMLElement;
@@ -65,17 +67,24 @@ export class VortexTerminal extends LitElement {
 		this._fitAddon = new FitAddon();
 		this._term = new Terminal({
 			theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-			convertEol: true,
-			scrollback: 10_000, // matches maxBufferedLines in internal/process/process.go
+			convertEol: false,
+			scrollback: 10_000,
 			fontFamily: 'Consolas, "Courier New", monospace',
 			fontSize: 13,
 		});
 		this._term.loadAddon(this._fitAddon);
 		this._term.open(wrap);
+		this._inputDisposable = this._term.onData((data) => {
+			void this._sendInput(data);
+		});
 		this._fitAddon.fit();
+		void this._reportSize();
 
 		// Re-fit whenever the host element is resized.
-		this._ro = new ResizeObserver(() => this._fitAddon?.fit());
+		this._ro = new ResizeObserver(() => {
+			this._fitAddon?.fit();
+			void this._reportSize();
+		});
 		this._ro.observe(this);
 
 		this._connectSSE();
@@ -86,8 +95,10 @@ export class VortexTerminal extends LitElement {
 			const prev = changed.get('terminal') as TerminalInfo | undefined;
 			if (prev?.id !== this.terminal?.id) {
 				this._term?.clear();
+				this._lastReportedSize = '';
 				this._disconnectSSE();
 				this._connectSSE();
+				void this._reportSize();
 			}
 		}
 	}
@@ -96,6 +107,8 @@ export class VortexTerminal extends LitElement {
 		super.disconnectedCallback();
 		this._ro?.disconnect();
 		this._disconnectSSE();
+		this._inputDisposable?.dispose();
+		this._inputDisposable = undefined;
 		this._term?.dispose();
 	}
 
@@ -104,8 +117,8 @@ export class VortexTerminal extends LitElement {
 		const url = `${API_BASE}/events?id=${encodeURIComponent(this.terminal.id)}`;
 		this._sse = new EventSource(url);
 		this._sse.onmessage = (e) => {
-			const line = JSON.parse(e.data) as LineDTO;
-			this._term?.writeln(line.text);
+			const chunk = JSON.parse(e.data) as LineDTO;
+			this._term?.write(decodeBase64(chunk.data));
 		};
 		// The server keeps the SSE stream open across process restarts.
 		// "exit" means the process exited, but the stream stays alive —
@@ -114,13 +127,13 @@ export class VortexTerminal extends LitElement {
 			// Server already appended [process exited] to the buffer.
 		});
 		this._sse.addEventListener('skipped', () => {
-			this._term?.writeln('\x1b[33m[job was skipped]\x1b[0m');
+			this._term?.write('\r\n\x1b[33m[job was skipped]\x1b[0m\r\n');
 		});
 		this._sse.addEventListener('failure', () => {
-			this._term?.writeln('\x1b[31m[job failed to start]\x1b[0m');
+			this._term?.write('\r\n\x1b[31m[job failed to start]\x1b[0m\r\n');
 		});
 		this._sse.onerror = () => {
-			this._term?.writeln('\r\n\x1b[31m[connection lost]\x1b[0m');
+			this._term?.write('\r\n\x1b[31m[connection lost]\x1b[0m\r\n');
 		};
 	}
 
@@ -143,7 +156,61 @@ export class VortexTerminal extends LitElement {
 		this._disconnectSSE();
 	}
 
+	private async _reportSize(): Promise<void> {
+		if (!this.terminal || !this._term) return;
+
+		const cols = this._term.cols;
+		const rows = this._term.rows;
+		if (!cols || !rows) return;
+
+		const key = `${this.terminal.id}:${cols}x${rows}`;
+		if (key === this._lastReportedSize) return;
+		this._lastReportedSize = key;
+
+		try {
+			await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/size`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cols, rows }),
+			});
+		} catch {
+			// The terminal may not be available yet; the next resize or reconnect will retry.
+		}
+	}
+
+	private async _sendInput(data: string): Promise<void> {
+		if (!this.terminal || data.length === 0) return;
+
+		try {
+			await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/input`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data: encodeBase64(data) }),
+			});
+		} catch {
+			// Ignore transient failures; a reconnect or rerun will restore the terminal stream.
+		}
+	}
+
 	render() {
 		return html`<div class="term-wrap"></div>`;
 	}
+}
+
+function decodeBase64(data: string): Uint8Array {
+	const binary = atob(data);
+	const out = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) {
+		out[i] = binary.charCodeAt(i);
+	}
+	return out;
+}
+
+function encodeBase64(data: string): string {
+	const bytes = new TextEncoder().encode(data);
+	let binary = '';
+	for (const value of bytes) {
+		binary += String.fromCharCode(value);
+	}
+	return btoa(binary);
 }
