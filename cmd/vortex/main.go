@@ -18,6 +18,8 @@
 //
 // Usage (self-update):
 //
+//	vortex version
+//	vortex -v
 //	vortex upgrade
 //
 // The YAML config file defines jobs with optional groups and dependency
@@ -64,6 +66,10 @@ var (
 
 func main() {
 	rawArgs := os.Args[1:]
+	if isVersionRequest(rawArgs) {
+		printVersion()
+		return
+	}
 	if len(rawArgs) > 0 && rawArgs[0] == "upgrade" {
 		if err := upgrade.Run(rawArgs[1:], upgrade.Options{CurrentVersion: Version}); err != nil {
 			log.Fatal(err)
@@ -375,6 +381,20 @@ func main() {
 				log.Printf("Ignoring show-ui for %q: UI is already open", identity.DisplayName)
 			}
 		}
+	}
+}
+
+func isVersionRequest(args []string) bool {
+	return len(args) == 1 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v")
+}
+
+func printVersion() {
+	fmt.Printf("vortex %s\n", Version)
+	if GitCommit != "" && GitCommit != "unknown" {
+		fmt.Printf("commit: %s\n", GitCommit)
+	}
+	if BuildTime != "" && BuildTime != "unknown" {
+		fmt.Printf("built: %s\n", BuildTime)
 	}
 }
 

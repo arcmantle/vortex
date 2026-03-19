@@ -72,6 +72,9 @@ Each job supports:
 
 ```
 vortex [flags] config.yaml
+vortex version
+vortex --version
+vortex -v
 vortex instances [name]
 vortex <name> --quit
 vortex <name> --kill
