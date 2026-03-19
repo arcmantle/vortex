@@ -1,0 +1,7 @@
+name: release-smoke
+
+jobs:
+  - id: smoke
+    label: Release Smoke
+    command: go version
+    group: smoke

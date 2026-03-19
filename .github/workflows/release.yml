@@ -94,7 +94,7 @@ jobs:
       - name: Smoke test embedded UI
         shell: bash
         run: |
-          ./${{ matrix.binary }} --headless --port 7370 > smoke.log 2>&1 &
+          ./${{ matrix.binary }} --headless --port 7370 --config mock/release-smoke.yaml > smoke.log 2>&1 &
           app_pid=$!
           success=0
 
@@ -106,7 +106,7 @@ jobs:
             sleep 1
           done
 
-          ./${{ matrix.binary }} --quit || true
+          ./${{ matrix.binary }} release-smoke --quit || true
           wait "$app_pid" || true
 
           if [[ "$success" -ne 1 ]]; then
