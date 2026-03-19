@@ -355,7 +355,7 @@ func stopRunningInstance() error {
 		}
 		if first {
 			_ = l.Close()
-			_ = instance.RemoveMetadata(identity.Name)
+			_ = instance.CleanupInactiveMetadata(meta)
 			continue
 		}
 		if err := instance.Quit(identity); err != nil {
@@ -370,7 +370,7 @@ func stopRunningInstance() error {
 			}
 			if first {
 				_ = l.Close()
-				_ = instance.RemoveMetadata(identity.Name)
+				_ = instance.CleanupInactiveMetadata(meta)
 				break
 			}
 			time.Sleep(250 * time.Millisecond)

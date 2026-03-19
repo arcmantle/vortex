@@ -11,9 +11,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
+
+	"arcmantle/vortex/internal/terminal"
 )
 
 const (
@@ -50,6 +53,7 @@ type Metadata struct {
 	StartedAt     int64  `json:"started_at"`
 	UpdatedAt     int64  `json:"updated_at"`
 	LastControlAt int64  `json:"last_control_at,omitempty"`
+	ChildPIDs     []int  `json:"child_pids,omitempty"`
 }
 
 // NewIdentity normalizes a Vortex instance name and derives deterministic ports.
@@ -268,6 +272,23 @@ func MarkControlAction(identity Identity) error {
 	return nil
 }
 
+// SetManagedPIDs records the currently running child process IDs for an instance.
+func SetManagedPIDs(identity Identity, pids []int) error {
+	meta, err := GetMetadata(identity.Name)
+	if err != nil {
+		return err
+	}
+	meta.ChildPIDs = normalizePIDs(pids)
+	dir, err := registryDir()
+	if err != nil {
+		return err
+	}
+	if err := writeMetadataFile(dir, meta); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ListMetadata returns all registered Vortex instances.
 func ListMetadata() ([]Metadata, error) {
 	dir, err := registryDir()
@@ -338,6 +359,41 @@ func RemoveMetadata(name string) error {
 		return fmt.Errorf("remove instance metadata: %w", err)
 	}
 	return nil
+}
+
+// CleanupInactiveMetadata removes a stale registry entry after best-effort termination
+// of the recorded controller and child processes.
+func CleanupInactiveMetadata(meta Metadata) error {
+	for _, pid := range normalizePIDs(append([]int{meta.PID}, meta.ChildPIDs...)) {
+		if err := terminal.KillProcessTreeByPID(pid); err != nil {
+			// Best effort only; stale cleanup should still remove the registry entry.
+			continue
+		}
+	}
+	return RemoveMetadata(meta.Name)
+}
+
+func normalizePIDs(pids []int) []int {
+	if len(pids) == 0 {
+		return nil
+	}
+	unique := make(map[int]struct{}, len(pids))
+	filtered := make([]int, 0, len(pids))
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		if _, seen := unique[pid]; seen {
+			continue
+		}
+		unique[pid] = struct{}{}
+		filtered = append(filtered, pid)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	sort.Ints(filtered)
+	return filtered
 }
 
 func hashOffset(name string) int {

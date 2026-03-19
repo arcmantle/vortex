@@ -47,6 +47,8 @@ jobs:
 vortex vortex.yaml
 ```
 
+Run `vortex help` to see the CLI commands and examples directly in the terminal.
+
 ## Config Reference
 
 Top-level config fields:
@@ -72,6 +74,9 @@ Each job supports:
 
 ```
 vortex [flags] config.yaml
+vortex help
+vortex --help
+vortex -h
 vortex version
 vortex --version
 vortex -v
@@ -144,6 +149,8 @@ go run ./cmd/vortex instances --prune
 The `instances` output includes each instance `mode` as one of `dev`, `headless`, or `windowed`, and each live `ui` state as one of `open`, `hidden`, or `none`.
 
 Use `instances --prune` to explicitly remove stale registry entries for instances that are no longer reachable.
+
+When pruning a stale instance, Vortex also makes a best-effort attempt to terminate the last recorded controller and managed child processes before removing the registry entry.
 
 It also includes:
 - `started`: when the instance was first registered

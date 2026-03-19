@@ -266,6 +266,14 @@ func (t *Terminal) Kill() {
 	}
 }
 
+// KillProcessTreeByPID terminates a process and its children by PID.
+func KillProcessTreeByPID(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	return killProcessTree(pid)
+}
+
 // seedFrom copies the output history from an old terminal into this one so
 // the UI preserves history across process restarts.
 func (t *Terminal) seedFrom(old *Terminal) {

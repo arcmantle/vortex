@@ -18,6 +18,7 @@
 //
 // Usage (self-update):
 //
+//	vortex help
 //	vortex version
 //	vortex -v
 //	vortex upgrade
@@ -36,6 +37,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -66,6 +68,10 @@ var (
 
 func main() {
 	rawArgs := os.Args[1:]
+	if len(rawArgs) == 0 || isHelpRequest(rawArgs) {
+		printHelp(os.Stdout)
+		return
+	}
 	if isVersionRequest(rawArgs) {
 		printVersion()
 		return
@@ -85,7 +91,7 @@ func main() {
 
 	opts, err := parseCLI(rawArgs)
 	if err != nil {
-		log.Fatal(err)
+		fatalCLIError(err)
 	}
 
 	if opts.quit {
@@ -100,7 +106,9 @@ func main() {
 		}
 		if first {
 			l.Close()
-			_ = instance.RemoveMetadata(identity.Name)
+			if meta, metaErr := instance.GetMetadata(identity.Name); metaErr == nil {
+				_ = instance.CleanupInactiveMetadata(meta)
+			}
 			fmt.Printf("No active Vortex instance named %q.\n", identity.DisplayName)
 			return
 		}
@@ -161,7 +169,7 @@ func main() {
 
 	cfg, configPath, err := loadConfigFile(opts.configFile, opts.positionals)
 	if err != nil {
-		log.Fatalf("config error: %v", err)
+		fatalCLIError(fmt.Errorf("config error: %w", err))
 	}
 
 	identity, err := instance.NewIdentity(cfg.Name)
@@ -332,6 +340,7 @@ func main() {
 
 	// Start all jobs according to their dependency graph.
 	orch.Start(ctx)
+	startManagedPIDSync(ctx, identity, orch)
 
 	// Start HTTP server in background.
 	serverErr := make(chan error, 1)
@@ -384,8 +393,52 @@ func main() {
 	}
 }
 
+func isHelpRequest(args []string) bool {
+	return len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")
+}
+
 func isVersionRequest(args []string) bool {
 	return len(args) == 1 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v")
+}
+
+func printHelp(w io.Writer) {
+	_, _ = fmt.Fprintf(w, `Vortex %s
+
+Usage:
+	vortex help
+	vortex version
+	vortex [--headless] [--port <n>] [--config <path>] config.yaml
+	vortex --dev [--port <n>] [--config <path>] config.yaml
+	vortex instances [name] [--json] [--prune]
+	vortex <name> --quit
+	vortex <name> --kill
+	vortex <name> show-ui
+	vortex <name> hide-ui
+	vortex upgrade [--check]
+
+Flags:
+	-h, --help      Show this help text
+	-v, --version   Show the current version
+	--config        Path to YAML config file
+	--port          Override the deterministic HTTP port for this instance
+	--headless      Run without opening the native webview
+	--dev           Development mode for browser/Vite workflow
+	--quit          Ask a named Vortex instance to shut down and exit
+	--kill          Ask a named Vortex instance to terminate its managed child processes
+
+Examples:
+	vortex help
+	vortex version
+	vortex --dev --config mock/dev.yaml
+	vortex instances --json
+	vortex dev --quit
+`, Version)
+}
+
+func fatalCLIError(err error) {
+	log.Printf("%v", err)
+	fmt.Fprintln(os.Stderr, "Run 'vortex help' for usage.")
+	os.Exit(1)
 }
 
 func printVersion() {
@@ -669,21 +722,54 @@ func runInstancesCommand(args []string) error {
 	}
 
 	for _, entry := range entries {
-		if !entry.Reachable {
-			fmt.Printf("%s  mode=%s  ui=%s  started=%s  updated=%s  last_control=%s  vortex_pid=%d  http=%d  handoff=%d  status=unreachable\n", entry.DisplayName, entry.Mode, entry.UI, formatInstanceTimestamp(entry.StartedAt), formatInstanceTimestamp(entry.UpdatedAt), formatInstanceTimestamp(entry.LastControlAt), entry.VortexPID, entry.HTTPPort, entry.HandoffPort)
-			fmt.Printf("  error: %s\n", entry.Error)
-			continue
-		}
-		fmt.Printf("%s  mode=%s  ui=%s  started=%s  updated=%s  last_control=%s  vortex_pid=%d  http=%d  handoff=%d  generation=%d\n", entry.DisplayName, entry.Mode, entry.UI, formatInstanceTimestamp(entry.StartedAt), formatInstanceTimestamp(entry.UpdatedAt), formatInstanceTimestamp(entry.LastControlAt), entry.VortexPID, entry.HTTPPort, entry.HandoffPort, entry.Generation)
-		if len(entry.Terminals) == 0 {
-			fmt.Println("  no managed jobs")
-			continue
-		}
-		for _, term := range entry.Terminals {
-			fmt.Printf("  - %s  pid=%d  status=%s  command=%s\n", term.ID, term.PID, term.Status, term.Command)
-		}
+		printInstanceEntry(entry)
 	}
 	return nil
+}
+
+func printInstanceEntry(entry instancesJSONEntry) {
+	fmt.Printf("%s\n", entry.DisplayName)
+	printInstanceField("name", entry.Name)
+	printInstanceField("mode", entry.Mode)
+	printInstanceField("ui", entry.UI)
+	printInstanceField("reachable", strconv.FormatBool(entry.Reachable))
+	printInstanceField("vortex pid", strconv.Itoa(entry.VortexPID))
+	printInstanceField("http port", strconv.Itoa(entry.HTTPPort))
+	printInstanceField("handoff port", strconv.Itoa(entry.HandoffPort))
+	printInstanceField("started", formatInstanceTimestamp(entry.StartedAt))
+	printInstanceField("updated", formatInstanceTimestamp(entry.UpdatedAt))
+	printInstanceField("last control", formatInstanceTimestamp(entry.LastControlAt))
+	if entry.Reachable {
+		printInstanceField("generation", strconv.Itoa(entry.Generation))
+	} else {
+		printInstanceField("status", "unreachable")
+		printInstanceField("error", entry.Error)
+	}
+
+	if len(entry.Terminals) == 0 {
+		fmt.Println("  jobs:")
+		fmt.Println("    - none")
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("  jobs:")
+	for _, term := range entry.Terminals {
+		fmt.Printf("    - %s\n", term.ID)
+		printJobField("label", term.Label)
+		printJobField("pid", strconv.Itoa(term.PID))
+		printJobField("status", term.Status)
+		printJobField("command", term.Command)
+	}
+	fmt.Println()
+}
+
+func printInstanceField(label, value string) {
+	fmt.Printf("  %-13s %s\n", label+":", value)
+}
+
+func printJobField(label, value string) {
+	fmt.Printf("      %-9s %s\n", label+":", value)
 }
 
 func parseInstancesCommand(args []string) (instancesCommandOptions, error) {
@@ -780,10 +866,46 @@ func cleanupStaleInstance(meta instance.Metadata) (bool, error) {
 	if l != nil {
 		_ = l.Close()
 	}
-	if err := instance.RemoveMetadata(identity.Name); err != nil {
+	if err := instance.CleanupInactiveMetadata(meta); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func startManagedPIDSync(ctx context.Context, identity instance.Identity, orch *orchestrator.Orchestrator) {
+	sync := func() {
+		pids := collectManagedPIDs(orch)
+		if err := instance.SetManagedPIDs(identity, pids); err != nil {
+			log.Printf("instance registry warning: %v", err)
+		}
+	}
+
+	sync()
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sync()
+			}
+		}
+	}()
+}
+
+func collectManagedPIDs(orch *orchestrator.Orchestrator) []int {
+	jobs := orch.AllJobs()
+	pids := make([]int, 0, len(jobs))
+	for _, job := range jobs {
+		if term := job.Terminal(); term != nil {
+			if pid := term.PID(); pid > 0 {
+				pids = append(pids, pid)
+			}
+		}
+	}
+	return pids
 }
 
 func killInstanceProcesses(identity instance.Identity) (killProcessesResponse, error) {
