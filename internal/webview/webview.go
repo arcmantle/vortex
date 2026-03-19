@@ -4,19 +4,27 @@ package webview
 
 import "context"
 
-var openWithContextImpl = func(context.Context, string, string, int, int) {}
+type Controller interface {
+	Focus()
+}
 
 // Open opens a native webview window pointing at url.
 // It blocks until the window is closed.
 func Open(title, url string, width, height int) {
-	openWithContextImpl(context.Background(), title, url, width, height)
+	openWithContext(context.Background(), title, url, width, height, nil)
 }
 
 // OpenWithContext opens a native webview window and terminates it when ctx is canceled.
 // On macOS this must be called from the main thread.
 func OpenWithContext(ctx context.Context, title, url string, width, height int) {
+	OpenWithContextAndReady(ctx, title, url, width, height, nil)
+}
+
+// OpenWithContextAndReady opens a native webview window and reports a controller
+// once the window exists so callers can bring it to the foreground later.
+func OpenWithContextAndReady(ctx context.Context, title, url string, width, height int, onReady func(Controller)) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	openWithContextImpl(ctx, title, url, width, height)
+	openWithContext(ctx, title, url, width, height, onReady)
 }

@@ -365,6 +365,73 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.Start(ctx)
 }
 
+// Rerun re-executes a single job and every downstream job that depends on it,
+// while leaving unrelated jobs untouched.
+func (o *Orchestrator) Rerun(ctx context.Context, id string) error {
+	o.mu.RLock()
+	if _, ok := o.jobs[id]; !ok {
+		o.mu.RUnlock()
+		return fmt.Errorf("job %q not found", id)
+	}
+	affectedSet := o.collectDownstreamLocked(id)
+	affectedOrder := make([]string, 0, len(o.order))
+	toWait := make([]<-chan struct{}, 0, len(affectedSet))
+	for _, jobID := range o.order {
+		if _, ok := affectedSet[jobID]; !ok {
+			continue
+		}
+		affectedOrder = append(affectedOrder, jobID)
+		job := o.jobs[jobID]
+		if term := job.Terminal(); term != nil && job.Status() == StatusRunning {
+			term.Kill()
+			toWait = append(toWait, job.Done())
+		}
+	}
+	o.mu.RUnlock()
+
+	for _, ch := range toWait {
+		<-ch
+	}
+
+	o.mu.Lock()
+	for _, jobID := range affectedOrder {
+		job := o.jobs[jobID]
+		o.jobs[jobID] = newJob(job.Spec)
+	}
+	close(o.restarted)
+	o.restarted = make(chan struct{})
+	o.mu.Unlock()
+
+	for _, jobID := range affectedOrder {
+		go o.runJob(ctx, o.jobs[jobID])
+	}
+	return nil
+}
+
+func (o *Orchestrator) collectDownstreamLocked(id string) map[string]struct{} {
+	affected := map[string]struct{}{id: {}}
+	queue := []string{id}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, candidateID := range o.order {
+			if _, seen := affected[candidateID]; seen {
+				continue
+			}
+			job := o.jobs[candidateID]
+			for _, needID := range job.Spec.Needs {
+				if needID != current {
+					continue
+				}
+				affected[candidateID] = struct{}{}
+				queue = append(queue, candidateID)
+				break
+			}
+		}
+	}
+	return affected
+}
+
 // Shutdown kills every running process tree managed by this orchestrator.
 func (o *Orchestrator) Shutdown() {
 	o.mu.RLock()

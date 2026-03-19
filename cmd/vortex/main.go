@@ -2,42 +2,37 @@
 //
 // Usage (YAML config):
 //
-//	vortex [--headless] [--port <n>] config.yaml
-//	vortex --dev [--port <n>] config.yaml
+//	vortex run [--headless] [--port <n>] config.yaml
+//	vortex run --dev [--port <n>] config.yaml
 //
 // Usage (instances):
 //
-//	vortex instances [name]
+//	vortex instance list [name]
 //
 // Usage (instance control):
 //
-//	vortex <name> --quit
-//	vortex <name> --kill
-//	vortex <name> show-ui
-//	vortex <name> hide-ui
+//	vortex instance quit <name>
+//	vortex instance kill <name>
+//	vortex instance rerun <name> <job-id>
+//	vortex instance show-ui <name>
+//	vortex instance hide-ui <name>
 //
 // Usage (self-update):
 //
 //	vortex help
+//	vortex docs
 //	vortex version
 //	vortex -v
 //	vortex upgrade
 //
 // The YAML config file defines jobs with optional groups and dependency
 // conditions. See internal/config/config.go for the full schema.
-//
-// Flags:
-//
-//	--headless  Run normally without opening the native window.
-//	--dev   Development mode: do not open the webview and use the browser/Vite workflow.
-//	--port  HTTP port for the Go server (default 7370).
 package main
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -55,7 +50,6 @@ import (
 	"arcmantle/vortex/internal/instance"
 	"arcmantle/vortex/internal/orchestrator"
 	"arcmantle/vortex/internal/server"
-	"arcmantle/vortex/internal/upgrade"
 	"arcmantle/vortex/internal/webview"
 )
 
@@ -67,127 +61,67 @@ var (
 )
 
 func main() {
-	rawArgs := os.Args[1:]
-	if len(rawArgs) == 0 || isHelpRequest(rawArgs) {
-		printHelp(os.Stdout)
-		return
+	root := rootCommand()
+	if err := validateCommandPath(root, os.Args[1:]); err != nil {
+		log.Fatal(err)
 	}
-	if isVersionRequest(rawArgs) {
-		printVersion()
-		return
+	if err := root.Execute(); err != nil {
+		log.Fatal(err)
 	}
-	if len(rawArgs) > 0 && rawArgs[0] == "upgrade" {
-		if err := upgrade.Run(rawArgs[1:], upgrade.Options{CurrentVersion: Version}); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	if len(rawArgs) > 0 && rawArgs[0] == "instances" {
-		if err := runInstancesCommand(rawArgs[1:]); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
+}
 
-	opts, err := parseCLI(rawArgs)
-	if err != nil {
-		fatalCLIError(err)
-	}
+func executeRunCommand(opts cliOptions) error {
+	opts.portSet = opts.port != 0
+	rawArgs := buildRunRawArgs(opts)
+	return runWithOptions(rawArgs, opts)
+}
 
-	if opts.quit {
-		identity, err := resolveTargetIdentity(opts, "usage: vortex <name> --quit")
-		if err != nil {
-			log.Fatal(err)
-		}
+func buildRunRawArgs(opts cliOptions) []string {
+	rawArgs := []string{"run"}
+	if opts.dev {
+		rawArgs = append(rawArgs, "--dev")
+	}
+	if opts.headless {
+		rawArgs = append(rawArgs, "--headless")
+	}
+	if opts.forked {
+		rawArgs = append(rawArgs, "--forked")
+	}
+	if opts.portSet {
+		rawArgs = append(rawArgs, "--port", strconv.Itoa(opts.port))
+	}
+	if opts.configFile != "" {
+		rawArgs = append(rawArgs, "--config", opts.configFile)
+	}
+	rawArgs = append(rawArgs, opts.positionals...)
+	return rawArgs
+}
 
-		l, first, err := instance.TryLock(identity)
-		if err != nil {
-			log.Fatalf("instance lock error: %v", err)
-		}
-		if first {
-			l.Close()
-			if meta, metaErr := instance.GetMetadata(identity.Name); metaErr == nil {
-				_ = instance.CleanupInactiveMetadata(meta)
-			}
-			fmt.Printf("No active Vortex instance named %q.\n", identity.DisplayName)
-			return
-		}
-		if err := instance.Quit(identity); err != nil {
-			log.Fatalf("shutdown request failed: %v", err)
-		}
-		fmt.Printf("Requested shutdown of Vortex instance %q.\n", identity.DisplayName)
-		return
+func runWithOptions(rawArgs []string, opts cliOptions) error {
+	if opts.dev && opts.headless {
+		return fmt.Errorf("--dev and --headless cannot be used together")
 	}
-	if opts.showUI {
-		identity, err := resolveTargetIdentity(opts, "usage: vortex <name> show-ui")
-		if err != nil {
-			log.Fatal(err)
-		}
-		meta, err := resolveInstanceMetadata(identity)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if meta.DevMode {
-			log.Fatalf("Vortex instance %q is running in --dev mode and cannot open a native webview", identity.DisplayName)
-		}
-		if err := instance.ShowUI(identity); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("Requested UI for Vortex instance %q.\n", identity.DisplayName)
-		return
-	}
-	if opts.hideUI {
-		identity, err := resolveTargetIdentity(opts, "usage: vortex <name> hide-ui")
-		if err != nil {
-			log.Fatal(err)
-		}
-		meta, err := resolveInstanceMetadata(identity)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if meta.DevMode {
-			log.Fatalf("Vortex instance %q is running in --dev mode and has no native webview to hide", identity.DisplayName)
-		}
-		if err := instance.HideUI(identity); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("Requested UI hide for Vortex instance %q.\n", identity.DisplayName)
-		return
-	}
-	if opts.kill {
-		identity, err := resolveTargetIdentity(opts, "usage: vortex <name> --kill")
-		if err != nil {
-			log.Fatal(err)
-		}
-		result, err := killInstanceProcesses(identity)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("Requested termination of %d process(es) for Vortex instance %q.\n", result.Killed, identity.DisplayName)
-		return
-	}
-
 	cfg, configPath, err := loadConfigFile(opts.configFile, opts.positionals)
 	if err != nil {
-		fatalCLIError(fmt.Errorf("config error: %w", err))
+		return fmt.Errorf("config error: %w", err)
 	}
 
 	identity, err := instance.NewIdentity(cfg.Name)
 	if err != nil {
-		log.Fatalf("config error: invalid name %q: %v", cfg.Name, err)
+		return fmt.Errorf("config error: invalid name %q: %w", cfg.Name, err)
 	}
 
 	// --- Named-instance check ---
 	l, first, err := instance.TryLock(identity)
 	if err != nil {
-		log.Fatalf("instance lock error: %v", err)
+		return fmt.Errorf("instance lock error: %w", err)
 	}
 	if !first {
 		if err := instance.Forward(identity, configPath, rawArgs); err != nil {
-			log.Fatalf("handoff failed: %v", err)
+			return fmt.Errorf("handoff failed: %w", err)
 		}
 		fmt.Printf("Forwarded config to existing Vortex instance %q.\n", identity.DisplayName)
-		os.Exit(0)
+		return nil
 	}
 
 	// On macOS/Linux, fork into a new session so the terminal is freed.
@@ -195,7 +129,7 @@ func main() {
 	if !opts.dev && !opts.headless && !opts.forked {
 		if maybeFork() {
 			l.Close()
-			return
+			return nil
 		}
 	}
 	defer l.Close()
@@ -213,7 +147,7 @@ func main() {
 	// --- Build orchestrator ---
 	orch, err := orchestrator.New(cfg)
 	if err != nil {
-		log.Fatalf("orchestrator error: %v", err)
+		return fmt.Errorf("orchestrator error: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -224,13 +158,15 @@ func main() {
 	uiSuppressStop := false
 	var closeUIWindow func(bool) bool
 	closeUIWindow = func(bool) bool { return false }
+	var focusUIWindow func() bool
+	focusUIWindow = func() bool { return false }
 
 	static := uiFS()
 	if !opts.dev && static == nil {
-		log.Fatal("non-dev mode requires embedded UI assets; run pnpm build in cmd/vortex-ui/web and start with go run -tags embed_ui ./cmd/vortex ..., or use --dev")
+		return fmt.Errorf("non-dev mode requires embedded UI assets; run pnpm build in cmd/vortex-ui/web and start with go run -tags embed_ui ./cmd/vortex ..., or use --dev")
 	}
 
-	srv := server.New(orch, static, nil, opts.dev, "http://localhost:5173", server.InstanceInfo{Name: identity.DisplayName, RegistryName: identity.Name, HTTPPort: httpPort})
+	srv := server.New(ctx, orch, static, nil, opts.dev, "http://localhost:5173", server.InstanceInfo{Name: identity.DisplayName, RegistryName: identity.Name, HTTPPort: httpPort})
 	addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	windowTitle := fmt.Sprintf("Vortex - %s", identity.DisplayName)
 	windowURL := fmt.Sprintf("http://%s", addr)
@@ -246,6 +182,7 @@ func main() {
 		if err := instance.SetUIState(identity, "open"); err != nil {
 			log.Printf("instance registry warning: %v", err)
 		}
+		focusUIWindow = func() bool { return false }
 		closeUIWindow = func(suppressStop bool) bool {
 			uiMu.Lock()
 			if !uiOpen {
@@ -260,13 +197,31 @@ func main() {
 		uiMu.Unlock()
 
 		open := func() {
-			webview.OpenWithContext(uiCtx, windowTitle, windowURL, 1280, 800)
+			webview.OpenWithContextAndReady(uiCtx, windowTitle, windowURL, 1280, 800, func(controller webview.Controller) {
+				if controller == nil {
+					return
+				}
+				uiMu.Lock()
+				if uiOpen {
+					focusUIWindow = func() bool {
+						uiMu.Lock()
+						defer uiMu.Unlock()
+						if !uiOpen {
+							return false
+						}
+						controller.Focus()
+						return true
+					}
+				}
+				uiMu.Unlock()
+			})
 
 			uiMu.Lock()
 			suppressStop := uiSuppressStop
 			uiOpen = false
 			uiSuppressStop = false
 			closeUIWindow = func(bool) bool { return false }
+			focusUIWindow = func() bool { return false }
 			uiMu.Unlock()
 			if suppressStop {
 				if err := instance.SetUIState(identity, "hidden"); err != nil {
@@ -290,6 +245,22 @@ func main() {
 		if payload.Action == "quit" {
 			log.Printf("Shutdown requested for instance %q", identity.DisplayName)
 			stop()
+			return
+		}
+		if payload.Action == "rerun" {
+			if len(payload.Args) != 1 || strings.TrimSpace(payload.Args[0]) == "" {
+				log.Printf("Ignoring rerun for %q: missing job id", identity.DisplayName)
+				return
+			}
+			jobID := strings.TrimSpace(payload.Args[0])
+			if err := orch.Rerun(ctx, jobID); err != nil {
+				log.Printf("rerun request failed for %q on instance %q: %v", jobID, identity.DisplayName, err)
+				return
+			}
+			if err := instance.MarkControlAction(identity); err != nil {
+				log.Printf("instance registry warning: %v", err)
+			}
+			log.Printf("Rerunning %q for instance %q", jobID, identity.DisplayName)
 			return
 		}
 		if payload.Action == "hide-ui" {
@@ -372,10 +343,10 @@ func main() {
 		select {
 		case <-ctx.Done():
 			orch.Shutdown()
-			return
+			return nil
 		case <-serverStopped:
 			orch.Shutdown()
-			return
+			return nil
 		case <-showUIRequests:
 			if opts.dev {
 				log.Printf("Ignoring show-ui for %q: instance is running in dev mode", identity.DisplayName)
@@ -387,58 +358,114 @@ func main() {
 			}
 			log.Printf("Opening native UI for %q", identity.DisplayName)
 			if !openUIWindow(true) {
+				if focusUIWindow() {
+					log.Printf("Surfaced native UI for %q", identity.DisplayName)
+					continue
+				}
 				log.Printf("Ignoring show-ui for %q: UI is already open", identity.DisplayName)
 			}
 		}
 	}
 }
 
-func isHelpRequest(args []string) bool {
-	return len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")
+func resolveCommandIdentity(nameArg, configPath, usage string) (instance.Identity, error) {
+	if configPath != "" {
+		if strings.TrimSpace(nameArg) != "" {
+			return instance.Identity{}, fmt.Errorf("use either a config file or an instance name, not both")
+		}
+		cfg, _, err := loadConfigFile(configPath, nil)
+		if err != nil {
+			return instance.Identity{}, err
+		}
+		return instance.NewIdentity(cfg.Name)
+	}
+	if strings.TrimSpace(nameArg) == "" {
+		return instance.Identity{}, fmt.Errorf("%s", usage)
+	}
+	return instance.NewIdentity(nameArg)
 }
 
-func isVersionRequest(args []string) bool {
-	return len(args) == 1 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v")
+func runQuitCommand(identity instance.Identity) error {
+	l, first, err := instance.TryLock(identity)
+	if err != nil {
+		return fmt.Errorf("instance lock error: %w", err)
+	}
+	if first {
+		if l != nil {
+			_ = l.Close()
+		}
+		if meta, metaErr := instance.GetMetadata(identity.Name); metaErr == nil {
+			_ = instance.CleanupInactiveMetadata(meta)
+		}
+		fmt.Printf("No active Vortex instance named %q.\n", identity.DisplayName)
+		return nil
+	}
+	if err := instance.Quit(identity); err != nil {
+		return fmt.Errorf("shutdown request failed: %w", err)
+	}
+	fmt.Printf("Requested shutdown of Vortex instance %q.\n", identity.DisplayName)
+	return nil
 }
 
-func printHelp(w io.Writer) {
-	_, _ = fmt.Fprintf(w, `Vortex %s
-
-Usage:
-	vortex help
-	vortex version
-	vortex [--headless] [--port <n>] [--config <path>] config.yaml
-	vortex --dev [--port <n>] [--config <path>] config.yaml
-	vortex instances [name] [--json] [--prune]
-	vortex <name> --quit
-	vortex <name> --kill
-	vortex <name> show-ui
-	vortex <name> hide-ui
-	vortex upgrade [--check]
-
-Flags:
-	-h, --help      Show this help text
-	-v, --version   Show the current version
-	--config        Path to YAML config file
-	--port          Override the deterministic HTTP port for this instance
-	--headless      Run without opening the native webview
-	--dev           Development mode for browser/Vite workflow
-	--quit          Ask a named Vortex instance to shut down and exit
-	--kill          Ask a named Vortex instance to terminate its managed child processes
-
-Examples:
-	vortex help
-	vortex version
-	vortex --dev --config mock/dev.yaml
-	vortex instances --json
-	vortex dev --quit
-`, Version)
+func runKillCommand(identity instance.Identity) error {
+	result, err := killInstanceProcesses(identity)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Requested termination of %d process(es) for Vortex instance %q.\n", result.Killed, identity.DisplayName)
+	return nil
 }
 
-func fatalCLIError(err error) {
-	log.Printf("%v", err)
-	fmt.Fprintln(os.Stderr, "Run 'vortex help' for usage.")
-	os.Exit(1)
+func runShowUICommand(identity instance.Identity) error {
+	meta, err := resolveInstanceMetadata(identity)
+	if err != nil {
+		return err
+	}
+	if meta.DevMode {
+		return fmt.Errorf("Vortex instance %q is running in --dev mode and cannot open a native webview", identity.DisplayName)
+	}
+	if err := instance.ShowUI(identity); err != nil {
+		return err
+	}
+	fmt.Printf("Requested UI for Vortex instance %q.\n", identity.DisplayName)
+	return nil
+}
+
+func runHideUICommand(identity instance.Identity) error {
+	meta, err := resolveInstanceMetadata(identity)
+	if err != nil {
+		return err
+	}
+	if meta.DevMode {
+		return fmt.Errorf("Vortex instance %q is running in --dev mode and has no native webview to hide", identity.DisplayName)
+	}
+	if err := instance.HideUI(identity); err != nil {
+		return err
+	}
+	fmt.Printf("Requested UI hide for Vortex instance %q.\n", identity.DisplayName)
+	return nil
+}
+
+func runRerunCommand(identity instance.Identity, jobID string) error {
+	l, first, err := instance.TryLock(identity)
+	if err != nil {
+		return fmt.Errorf("instance lock error: %w", err)
+	}
+	if first {
+		if l != nil {
+			_ = l.Close()
+		}
+		if meta, metaErr := instance.GetMetadata(identity.Name); metaErr == nil {
+			_ = instance.CleanupInactiveMetadata(meta)
+		}
+		fmt.Printf("No active Vortex instance named %q.\n", identity.DisplayName)
+		return nil
+	}
+	if err := instance.Rerun(identity, strings.TrimSpace(jobID)); err != nil {
+		return err
+	}
+	fmt.Printf("Requested rerun of %q for Vortex instance %q.\n", strings.TrimSpace(jobID), identity.DisplayName)
+	return nil
 }
 
 func printVersion() {
@@ -454,91 +481,11 @@ func printVersion() {
 type cliOptions struct {
 	dev         bool
 	headless    bool
-	quit        bool
-	showUI      bool
-	hideUI      bool
-	kill        bool
 	forked      bool
 	port        int
 	portSet     bool
 	configFile  string
 	positionals []string
-}
-
-func parseCLI(args []string) (cliOptions, error) {
-	opts := cliOptions{}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--dev":
-			opts.dev = true
-		case arg == "--headless":
-			opts.headless = true
-		case arg == "--quit":
-			opts.quit = true
-		case arg == "show-ui":
-			opts.showUI = true
-		case arg == "hide-ui":
-			opts.hideUI = true
-		case arg == "--kill":
-			opts.kill = true
-		case arg == "--forked":
-			opts.forked = true
-		case arg == "--config":
-			i++
-			if i >= len(args) {
-				return cliOptions{}, fmt.Errorf("--config requires a path")
-			}
-			opts.configFile = args[i]
-		case strings.HasPrefix(arg, "--config="):
-			opts.configFile = strings.TrimPrefix(arg, "--config=")
-		case arg == "--port":
-			i++
-			if i >= len(args) {
-				return cliOptions{}, fmt.Errorf("--port requires a value")
-			}
-			port, err := strconv.Atoi(args[i])
-			if err != nil {
-				return cliOptions{}, fmt.Errorf("invalid --port value %q", args[i])
-			}
-			opts.port = port
-			opts.portSet = true
-		case strings.HasPrefix(arg, "--port="):
-			portValue := strings.TrimPrefix(arg, "--port=")
-			port, err := strconv.Atoi(portValue)
-			if err != nil {
-				return cliOptions{}, fmt.Errorf("invalid --port value %q", portValue)
-			}
-			opts.port = port
-			opts.portSet = true
-		case arg == "--":
-			return cliOptions{}, fmt.Errorf("inline mode is no longer supported; provide a YAML config with a top-level name")
-		case strings.HasPrefix(arg, "-"):
-			return cliOptions{}, fmt.Errorf("unknown flag %q", arg)
-		default:
-			opts.positionals = append(opts.positionals, arg)
-		}
-	}
-	if opts.dev && opts.headless {
-		return cliOptions{}, fmt.Errorf("--dev and --headless cannot be used together")
-	}
-	actionCount := 0
-	if opts.quit {
-		actionCount++
-	}
-	if opts.showUI {
-		actionCount++
-	}
-	if opts.hideUI {
-		actionCount++
-	}
-	if opts.kill {
-		actionCount++
-	}
-	if actionCount > 1 {
-		return cliOptions{}, fmt.Errorf("choose only one instance control action: show-ui, hide-ui, --kill, or --quit")
-	}
-	return opts, nil
 }
 
 func loadConfigFile(configPath string, args []string) (*config.Config, string, error) {
@@ -567,23 +514,6 @@ func loadConfigFile(configPath string, args []string) (*config.Config, string, e
 		return nil, "", err
 	}
 	return cfg, absPath, nil
-}
-
-func resolveTargetIdentity(opts cliOptions, usage string) (instance.Identity, error) {
-	if opts.configFile != "" {
-		if len(opts.positionals) > 0 {
-			return instance.Identity{}, fmt.Errorf("use either a config file or an instance name, not both")
-		}
-		cfg, _, err := loadConfigFile(opts.configFile, nil)
-		if err != nil {
-			return instance.Identity{}, err
-		}
-		return instance.NewIdentity(cfg.Name)
-	}
-	if len(opts.positionals) != 1 {
-		return instance.Identity{}, fmt.Errorf("%s", usage)
-	}
-	return instance.NewIdentity(opts.positionals[0])
 }
 
 type instanceListResponse struct {
@@ -635,12 +565,7 @@ type instancesJSONOutput struct {
 	Instances []instancesJSONEntry `json:"instances"`
 }
 
-func runInstancesCommand(args []string) error {
-	opts, err := parseInstancesCommand(args)
-	if err != nil {
-		return err
-	}
-
+func runInstancesCommandWithOptions(opts instancesCommandOptions) error {
 	instances, err := instance.ListMetadata()
 	if err != nil {
 		return err
@@ -720,6 +645,8 @@ func runInstancesCommand(args []string) error {
 		fmt.Printf("No running Vortex instances matched %q.\n", opts.filterName)
 		return nil
 	}
+	fmt.Println("Tip: rerun a job with 'vortex instance rerun <instance> <job-id>'.")
+	fmt.Println()
 
 	for _, entry := range entries {
 		printInstanceEntry(entry)
@@ -770,29 +697,6 @@ func printInstanceField(label, value string) {
 
 func printJobField(label, value string) {
 	fmt.Printf("      %-9s %s\n", label+":", value)
-}
-
-func parseInstancesCommand(args []string) (instancesCommandOptions, error) {
-	var opts instancesCommandOptions
-	for _, arg := range args {
-		switch {
-		case arg == "--json":
-			opts.jsonOutput = true
-		case arg == "--prune":
-			opts.prune = true
-		case strings.HasPrefix(arg, "-"):
-			return instancesCommandOptions{}, fmt.Errorf("unknown flag %q", arg)
-		case opts.filterName != "":
-			return instancesCommandOptions{}, fmt.Errorf("usage: vortex instances [name] [--json] [--prune]")
-		default:
-			identity, err := instance.NewIdentity(arg)
-			if err != nil {
-				return instancesCommandOptions{}, err
-			}
-			opts.filterName = identity.Name
-		}
-	}
-	return opts, nil
 }
 
 func pluralWord(n int) string {

@@ -44,10 +44,10 @@ jobs:
 ```
 
 ```sh
-vortex vortex.yaml
+vortex run vortex.yaml
 ```
 
-Run `vortex help` to see the CLI commands and examples directly in the terminal.
+Run `vortex help` to see the CLI commands and examples directly in the terminal, or `vortex docs` to open this README as embedded app documentation.
 
 ## Config Reference
 
@@ -70,32 +70,38 @@ Each job supports:
 | `if`      | `string`   | When to run: `success` (default), `failure`, or `always`.               |
 | `restart` | `bool`     | Whether to kill and re-launch on restart. Defaults to `true`.           |
 
-## CLI Flags
+## CLI
 
 ```
-vortex [flags] config.yaml
 vortex help
+vortex run [--dev] [--headless] [--port <n>] [--config <path>] [config.yaml]
+vortex docs [--force] [--no-open]
 vortex --help
 vortex -h
 vortex version
 vortex --version
 vortex -v
-vortex instances [name]
-vortex <name> --quit
-vortex <name> --kill
-vortex <name> show-ui
-vortex <name> hide-ui
-vortex upgrade
+vortex instance list [name] [--json] [--prune]
+vortex instance quit [name] [--config <path>]
+vortex instance kill [name] [--config <path>]
+vortex instance rerun <name> <job-id>
+vortex instance show-ui [name] [--config <path>]
+vortex instance hide-ui [name] [--config <path>]
+vortex upgrade [--check]
 ```
 
-| Flag       | Default | Description                                             |
-|------------|---------|---------------------------------------------------------|
-| `--config` | —       | Path to YAML config file                                |
-| `--port`   | derived from `name` | Override the deterministic HTTP port for this instance |
-| `--headless` | `false` | Run normally without opening the native webview       |
-| `--dev`    | `false` | Development mode: skip the native webview and use the browser/Vite workflow |
-| `--quit`   | `false` | Ask the named Vortex instance to shut down and exit     |
-| `--kill`   | `false` | Ask the named Vortex instance to terminate its managed child processes |
+Important command-specific flags:
+
+| Flag | Applies To | Description |
+|------|------------|-------------|
+| `--config` | `run`, `instance quit`, `instance kill`, `instance show-ui`, `instance hide-ui` | Resolve the config or target instance from a YAML file |
+| `--port` | `run` | Override the deterministic HTTP port for the instance |
+| `--headless` | `run` | Run normally without opening the native webview |
+| `--dev` | `run` | Development mode: skip the native webview and use the browser/Vite workflow |
+| `--json` | `instance list` | Emit machine-readable JSON |
+| `--prune` | `instance list` | Remove stale instance entries while listing |
+| `--force` | `docs` | Regenerate rendered docs even if a file already exists |
+| `--no-open` | `docs` | Generate docs without opening a browser |
 
 `name` is mandatory. Unnamed configs fail validation.
 
@@ -104,31 +110,50 @@ By default, Vortex derives both the handoff port and the HTTP/UI port from the c
 To stop a running instance from the CLI:
 
 ```sh
-go run ./cmd/vortex dev --quit
+go run ./cmd/vortex instance quit dev
 ```
 
 To terminate all child processes managed by a running instance without shutting down the Vortex controller:
 
 ```sh
-go run ./cmd/vortex dev --kill
+go run ./cmd/vortex instance kill dev
+```
+
+To rerun a specific job and any downstream jobs that depend on it, without rerunning unrelated jobs:
+
+```sh
+go run ./cmd/vortex instance rerun dev run-server-a
+```
+
+To open the embedded README documentation in your browser:
+
+```sh
+go run ./cmd/vortex docs
+```
+
+To regenerate the rendered docs or write them without opening a browser:
+
+```sh
+go run ./cmd/vortex docs --force
+go run ./cmd/vortex docs --no-open
 ```
 
 To start a config without opening the native window immediately:
 
 ```sh
-go run -tags embed_ui ./cmd/vortex --headless --config mock/dev.yaml
+go run -tags embed_ui ./cmd/vortex run --headless --config mock/dev.yaml
 ```
 
 To surface the native webview later for that running instance:
 
 ```sh
-go run ./cmd/vortex dev show-ui
+go run ./cmd/vortex instance show-ui dev
 ```
 
 To dismiss the native webview later without stopping the running instance:
 
 ```sh
-go run ./cmd/vortex dev hide-ui
+go run ./cmd/vortex instance hide-ui dev
 ```
 
 `show-ui` is intended for non-`--dev` instances. If an instance was started with `--dev`, there is no native webview to surface later.
@@ -140,29 +165,29 @@ Use `--headless` for normal no-window operation. Keep `--dev` for the developmen
 To list running instances and the process IDs they currently manage:
 
 ```sh
-go run ./cmd/vortex instances
-go run ./cmd/vortex instances dev
-go run ./cmd/vortex instances --json
-go run ./cmd/vortex instances --prune
+go run ./cmd/vortex instance list
+go run ./cmd/vortex instance list dev
+go run ./cmd/vortex instance list --json
+go run ./cmd/vortex instance list --prune
 ```
 
-The `instances` output includes each instance `mode` as one of `dev`, `headless`, or `windowed`, and each live `ui` state as one of `open`, `hidden`, or `none`.
+The `instance list` output includes each instance `mode` as one of `dev`, `headless`, or `windowed`, and each live `ui` state as one of `open`, `hidden`, or `none`.
 
-Use `instances --prune` to explicitly remove stale registry entries for instances that are no longer reachable.
+Use `instance list --prune` to explicitly remove stale registry entries for instances that are no longer reachable.
 
 When pruning a stale instance, Vortex also makes a best-effort attempt to terminate the last recorded controller and managed child processes before removing the registry entry.
 
 It also includes:
 - `started`: when the instance was first registered
 - `updated`: the last metadata/lifecycle update, currently refreshed on restart and UI visibility changes
-- `last_control`: the last explicit control action time, currently refreshed on kill actions
+- `last_control`: the last explicit control action time, currently refreshed on kill, rerun, and UI visibility actions
 - `generation`: the orchestrator restart generation for the running instance
 - `reachable`: in `--json` output, whether the instance API was reachable when queried
 
 To restart an already-running instance, rerun any YAML config that declares the same `name`:
 
 ```sh
-go run ./cmd/vortex --config mock/dev.yaml
+go run ./cmd/vortex run --config mock/dev.yaml
 ```
 
 Inline `label:command` mode is no longer supported. Use a YAML config with a top-level `name` instead.
@@ -198,7 +223,7 @@ If your shell was updated, open a new terminal session so the new PATH is loaded
 For CI or smoke tests, you can serve the embedded UI without opening a native window:
 
 ```sh
-go run -tags embed_ui ./cmd/vortex --headless
+go run -tags embed_ui ./cmd/vortex run --headless
 ```
 
 ## Building

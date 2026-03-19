@@ -30,6 +30,7 @@ const (
 	handoffActionQuit    = "quit"
 	handoffActionShowUI  = "show-ui"
 	handoffActionHideUI  = "hide-ui"
+	handoffActionRerun   = "rerun"
 )
 
 // Identity describes a named Vortex instance and its deterministic ports.
@@ -140,6 +141,16 @@ func ShowUI(identity Identity) error {
 // HideUI asks the running instance to dismiss its native UI window without stopping jobs.
 func HideUI(identity Identity) error {
 	payload, err := json.Marshal(HandoffPayload{Action: handoffActionHideUI, Name: identity.Name})
+	if err != nil {
+		return err
+	}
+
+	return postHandoff(identity, payload)
+}
+
+// Rerun asks the running instance to rerun a specific job and its downstream dependents.
+func Rerun(identity Identity, jobID string) error {
+	payload, err := json.Marshal(HandoffPayload{Action: handoffActionRerun, Name: identity.Name, Args: []string{jobID}})
 	if err != nil {
 		return err
 	}

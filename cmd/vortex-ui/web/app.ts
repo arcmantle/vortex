@@ -111,11 +111,22 @@ export class VortexApp extends LitElement {
       overflow: hidden;
     }
 
-    .clear-btn {
+    .panel-toolbar {
       position: absolute;
       top: 8px;
       right: 12px;
       z-index: 10;
+      display: inline-grid;
+      grid-auto-flow: column;
+      gap: 8px;
+      padding: 6px;
+      border: 1px solid #454545;
+      border-radius: 999px;
+      background: rgba(37, 37, 38, 0.92);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    .toolbar-btn {
       width: 28px;
       height: 28px;
       border-radius: 50%;
@@ -130,7 +141,7 @@ export class VortexApp extends LitElement {
       opacity: 0.6;
       transition: opacity 0.15s, background 0.15s;
     }
-    .clear-btn:hover {
+    .toolbar-btn:hover {
       opacity: 1;
       background: #444;
     }
@@ -268,9 +279,20 @@ export class VortexApp extends LitElement {
     }
   }
 
+  private async _rerunTab(id: string): Promise<void> {
+    await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(id)}/rerun`, { method: 'POST' });
+    this._closedIds = new Set(this._closedIds);
+    this._fetchTerminals();
+  }
+
   private _clearTerminal(): void {
     const term = this.shadowRoot?.querySelector('vortex-terminal') as import('./components/vortex-terminal.js').VortexTerminal | null;
     term?.clearOutput();
+  }
+
+  private _rerunActiveTerminal(): void {
+    if (!this._activeId) return;
+    void this._rerunTab(this._activeId);
   }
 
   render() {
@@ -316,7 +338,10 @@ export class VortexApp extends LitElement {
       <div class="panel">
         ${active
           ? html`
-            <button class="clear-btn" @click=${() => this._clearTerminal()} title="Clear terminal">&#x2715;</button>
+            <div class="panel-toolbar">
+              <button class="toolbar-btn" @click=${() => this._rerunActiveTerminal()} title="Rerun this job and downstream dependent jobs">&#x21bb;</button>
+              <button class="toolbar-btn" @click=${() => this._clearTerminal()} title="Clear terminal">&#x2715;</button>
+            </div>
             <vortex-terminal .terminal=${active}></vortex-terminal>
           `
           : html`<div class="empty">No terminals.</div>`}

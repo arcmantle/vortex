@@ -35,6 +35,7 @@ type InstanceInfo struct {
 
 // Server is the Vortex HTTP server.
 type Server struct {
+	appCtx         context.Context
 	orch           *orchestrator.Orchestrator
 	static         fs.FS
 	onHandoff      HandoffHandler
@@ -49,8 +50,9 @@ type Server struct {
 //   - onHandoff: called when a second instance forwards its args
 //   - devMode: when true, /api/* is served but static files are not embedded
 //   - devServerURL: Vite dev server URL to proxy static requests to (unused when devMode==false)
-func New(orch *orchestrator.Orchestrator, static fs.FS, onHandoff HandoffHandler, devMode bool, devServerURL string, instance InstanceInfo) *Server {
+func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, onHandoff HandoffHandler, devMode bool, devServerURL string, instance InstanceInfo) *Server {
 	return &Server{
+		appCtx:         appCtx,
 		orch:           orch,
 		static:         static,
 		onHandoff:      onHandoff,
@@ -69,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("DELETE /api/processes", s.handleKillProcesses)
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleKillTerminal)
+	mux.HandleFunc("POST /api/terminals/{id}/rerun", s.handleRerunTerminal)
 	mux.HandleFunc("DELETE /api/terminals/{id}/buffer", s.handleClearBuffer)
 	mux.HandleFunc("POST /handoff", s.handleHandoff)
 
@@ -326,6 +329,28 @@ func (s *Server) handleKillTerminal(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRerunTerminal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.orch.GetJob(id); !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err := s.orch.Rerun(s.appCtx, id); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if s.instance.RegistryName != "" {
+		identity, err := instance.NewIdentity(s.instance.RegistryName)
+		if err == nil {
+			if err := instance.MarkControlAction(identity); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
 			}
 		}
 	}
