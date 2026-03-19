@@ -1,0 +1,31 @@
+name: dev-second
+
+jobs:
+  - id: build-server-a
+    label: Build Server A
+    command: dotnet build mock/server-a
+    group: build
+
+  - id: build-server-b
+    label: Build Server B
+    command: dotnet build mock/server-b
+    group: build
+
+  - id: run-server-a
+    label: Server A
+    command: dotnet run --project mock/server-a --no-build --urls http://localhost:6100
+    group: run
+    needs: [build-server-a, build-server-b]
+
+  - id: run-server-b
+    label: Server B
+    command: dotnet run --project mock/server-b --no-build --urls http://localhost:6200
+    group: run
+    needs: [build-server-a, build-server-b]
+
+  - id: vite-app
+    label: Vite App
+    command: pnpm --dir mock/vite-app dev -- --port 6300
+    group: run
+    needs: [build-server-a, build-server-b]
+    restart: false

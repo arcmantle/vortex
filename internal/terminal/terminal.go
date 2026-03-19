@@ -67,7 +67,7 @@ type Terminal struct {
 	lineBuf  ringLine
 	subs     []chan Line
 	done     chan struct{}
-	exited   bool               // set under mu when drain finishes
+	exited   bool // set under mu when drain finishes
 	exitErr  error
 	exitCode int
 	cancel   context.CancelFunc // cancels the child-process context
@@ -239,6 +239,16 @@ func (t *Terminal) ExitCode() int {
 	return t.exitCode
 }
 
+// PID returns the child process ID, or 0 if the process was never started.
+func (t *Terminal) PID() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.exited || t.cmd == nil || t.cmd.Process == nil {
+		return 0
+	}
+	return t.cmd.Process.Pid
+}
+
 // ClearBuffer resets the output ring buffer.
 func (t *Terminal) ClearBuffer() {
 	t.mu.Lock()
@@ -319,4 +329,20 @@ func (m *Manager) All() []*Terminal {
 		}
 	}
 	return out
+}
+
+// Prune removes terminal entries whose IDs are not present in keepIDs.
+// It does not kill processes; callers must stop any removed jobs first.
+func (m *Manager) Prune(keepIDs map[string]struct{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	newOrder := make([]string, 0, len(m.order))
+	for _, id := range m.order {
+		if _, keep := keepIDs[id]; keep {
+			newOrder = append(newOrder, id)
+			continue
+		}
+		delete(m.terminals, id)
+	}
+	m.order = newOrder
 }

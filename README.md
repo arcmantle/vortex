@@ -12,7 +12,7 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 - **Live terminal output** — each job streams stdout/stderr into its own xterm.js terminal panel via SSE
 - **Native webview** — opens as a standalone desktop window (Edge WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux)
 - **Job groups** — organize related jobs under collapsible groups in the UI
-- **Single-instance** — launching vortex while it's already running forwards the new config to the existing instance, which restarts with the new job graph
+- **Named instances** — every YAML config declares a required `name`, and Vortex routes restart / quit commands to that specific running instance
 - **Persistent jobs** — mark long-running jobs with `restart: false` to keep them alive across config reloads
 - **Embedded UI** — production builds embed the frontend into the Go binary (zero external files)
 
@@ -22,6 +22,8 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 
 ```yaml
 # vortex.yaml
+name: dev
+
 jobs:
   - id: build
     label: Build
@@ -45,15 +47,14 @@ jobs:
 vortex vortex.yaml
 ```
 
-### Inline mode
-
-```sh
-vortex -- "server:go run ./cmd/server" "client:pnpm dev"
-```
-
-All inline jobs run in parallel with no dependencies.
-
 ## Config Reference
+
+Top-level config fields:
+
+| Field  | Type     | Description                                                                  |
+|--------|----------|------------------------------------------------------------------------------|
+| `name` | `string` | **Required.** Instance name used to target restarts and `vortex <name> --quit`. |
+| `jobs` | `Job[]`  | **Required.** Jobs to run in this instance.                                  |
 
 Each job supports:
 
@@ -70,23 +71,91 @@ Each job supports:
 ## CLI Flags
 
 ```
-vortex [flags] [config.yaml | -- label:command ...]
+vortex [flags] config.yaml
+vortex instances [name]
+vortex <name> --quit
+vortex <name> --kill
+vortex <name> show-ui
+vortex <name> hide-ui
 vortex upgrade
 ```
 
 | Flag       | Default | Description                                             |
 |------------|---------|---------------------------------------------------------|
 | `--config` | —       | Path to YAML config file                                |
-| `--port`   | `7370`  | HTTP port for the API / SSE server                      |
-| `--dev`    | `false` | Skip the native webview; use a browser instead          |
-| `--headless` | `false` | Serve embedded UI without opening a native window     |
-| `--quit`   | `false` | Ask the running Vortex instance to shut down and exit   |
+| `--port`   | derived from `name` | Override the deterministic HTTP port for this instance |
+| `--headless` | `false` | Run normally without opening the native webview       |
+| `--dev`    | `false` | Development mode: skip the native webview and use the browser/Vite workflow |
+| `--quit`   | `false` | Ask the named Vortex instance to shut down and exit     |
+| `--kill`   | `false` | Ask the named Vortex instance to terminate its managed child processes |
+
+`name` is mandatory. Unnamed configs fail validation.
+
+By default, Vortex derives both the handoff port and the HTTP/UI port from the config name, so different named configs can run at the same time without manual port management.
 
 To stop a running instance from the CLI:
 
 ```sh
-go run ./cmd/vortex --quit
+go run ./cmd/vortex dev --quit
 ```
+
+To terminate all child processes managed by a running instance without shutting down the Vortex controller:
+
+```sh
+go run ./cmd/vortex dev --kill
+```
+
+To start a config without opening the native window immediately:
+
+```sh
+go run -tags embed_ui ./cmd/vortex --headless --config mock/dev.yaml
+```
+
+To surface the native webview later for that running instance:
+
+```sh
+go run ./cmd/vortex dev show-ui
+```
+
+To dismiss the native webview later without stopping the running instance:
+
+```sh
+go run ./cmd/vortex dev hide-ui
+```
+
+`show-ui` is intended for non-`--dev` instances. If an instance was started with `--dev`, there is no native webview to surface later.
+
+`hide-ui` is non-destructive: it hides the native window but leaves the Vortex instance and its managed jobs running.
+
+Use `--headless` for normal no-window operation. Keep `--dev` for the development workflow where the Vite dev server proxies to Vortex and you work in the browser.
+
+To list running instances and the process IDs they currently manage:
+
+```sh
+go run ./cmd/vortex instances
+go run ./cmd/vortex instances dev
+go run ./cmd/vortex instances --json
+go run ./cmd/vortex instances --prune
+```
+
+The `instances` output includes each instance `mode` as one of `dev`, `headless`, or `windowed`, and each live `ui` state as one of `open`, `hidden`, or `none`.
+
+Use `instances --prune` to explicitly remove stale registry entries for instances that are no longer reachable.
+
+It also includes:
+- `started`: when the instance was first registered
+- `updated`: the last metadata/lifecycle update, currently refreshed on restart and UI visibility changes
+- `last_control`: the last explicit control action time, currently refreshed on kill actions
+- `generation`: the orchestrator restart generation for the running instance
+- `reachable`: in `--json` output, whether the instance API was reachable when queried
+
+To restart an already-running instance, rerun any YAML config that declares the same `name`:
+
+```sh
+go run ./cmd/vortex --config mock/dev.yaml
+```
+
+Inline `label:command` mode is no longer supported. Use a YAML config with a top-level `name` instead.
 
 To upgrade to the latest GitHub release and install it into a managed location:
 
@@ -111,6 +180,7 @@ The `upgrade` command will:
 - verify the downloaded binary against the release SHA-256 checksum file
 - stop a running Vortex instance before replacing the installed binary
 - place the binary into the managed install location if it is not already there
+- on macOS, make the installed binary executable and remove the `com.apple.quarantine` attribute
 - attempt to add that install directory to your user PATH automatically
 
 If your shell was updated, open a new terminal session so the new PATH is loaded.
@@ -136,7 +206,7 @@ go run -tags embed_ui ./cmd/vortex --headless
 
 ```sh
 # Start the Go server + Vite dev server
-go run ./cmd/vortex --dev --port 7370 --config dev.yaml &
+go run ./cmd/vortex --dev --config mock/dev.yaml &
 cd cmd/vortex-ui/web && pnpm install && pnpm dev
 ```
 
@@ -187,7 +257,7 @@ cmd/vortex/          CLI entry point, UI embedding
 cmd/vortex-ui/web/   Lit + TypeScript frontend (xterm.js terminals)
 internal/
   config/            YAML config loading and validation
-  instance/          Single-instance lock via TCP + handoff protocol
+  instance/          Named-instance lock, deterministic port derivation, handoff registry
   orchestrator/      Dependency-aware job graph execution
   terminal/          Process lifecycle, output buffering, ring buffer
   server/            HTTP API, SSE streaming, static file serving

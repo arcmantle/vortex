@@ -153,6 +153,9 @@ func Run(args []string, opts Options) error {
 		if err := os.Rename(tmpPath, targetPath); err != nil {
 			return fmt.Errorf("install binary: %w", err)
 		}
+		if err := finalizeUnixInstall(targetPath); err != nil {
+			return err
+		}
 	}
 
 	if changed, err := ensurePathEntry(installDir); err != nil {
@@ -337,30 +340,46 @@ func fetchExpectedChecksum(url string, assetName string) (string, error) {
 }
 
 func stopRunningInstance() error {
-	l, first, err := instance.TryLock()
+	instances, err := instance.ListMetadata()
 	if err != nil {
 		return err
 	}
-	if first {
-		return l.Close()
-	}
-	if err := instance.Quit(); err != nil {
-		return err
-	}
-
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		l, first, err = instance.TryLock()
+	for _, meta := range instances {
+		identity, err := instance.NewIdentity(meta.Name)
+		if err != nil {
+			continue
+		}
+		l, first, err := instance.TryLock(identity)
 		if err != nil {
 			return err
 		}
 		if first {
-			return l.Close()
+			_ = l.Close()
+			_ = instance.RemoveMetadata(identity.Name)
+			continue
 		}
-		time.Sleep(250 * time.Millisecond)
-	}
+		if err := instance.Quit(identity); err != nil {
+			return err
+		}
 
-	return errors.New("timed out waiting for the running vortex instance to stop")
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			l, first, err = instance.TryLock(identity)
+			if err != nil {
+				return err
+			}
+			if first {
+				_ = l.Close()
+				_ = instance.RemoveMetadata(identity.Name)
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for the running vortex instance %q to stop", identity.DisplayName)
+		}
+	}
+	return nil
 }
 
 func ensurePathEntry(dir string) (bool, error) {

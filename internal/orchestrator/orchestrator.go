@@ -32,9 +32,9 @@ const (
 type Job struct {
 	Spec config.JobSpec
 
-	mu      sync.Mutex
-	status  Status
-	term    *terminal.Terminal
+	mu     sync.Mutex
+	status Status
+	term   *terminal.Terminal
 
 	// started is closed once proc is set, or when the job reaches a terminal
 	// state without ever starting a process (skipped / failed to launch).
@@ -300,6 +300,10 @@ func (o *Orchestrator) AddAndStart(ctx context.Context, id, label, command strin
 // so the UI can show updates in the same terminal panels.
 func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.mu.Lock()
+	keepIDs := make(map[string]struct{}, len(cfg.Jobs))
+	for _, spec := range cfg.Jobs {
+		keepIDs[spec.ID] = struct{}{}
+	}
 
 	// 1. Kill running processes — but only for jobs that should restart.
 	//    Persistent jobs (restart: false) keep running.
@@ -307,7 +311,8 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	persistent := make(map[string]*Job) // old jobs to carry forward
 	for _, id := range o.order {
 		job := o.jobs[id]
-		if !job.Spec.ShouldRestart() {
+		_, stillPresent := keepIDs[id]
+		if !job.Spec.ShouldRestart() && stillPresent {
 			persistent[id] = job
 			continue
 		}
@@ -345,6 +350,7 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	}
 	o.jobs = newJobs
 	o.order = newOrder
+	o.termMgr.Prune(keepIDs)
 
 	// Signal SSE handlers to re-fetch their jobs.
 	close(o.restarted)

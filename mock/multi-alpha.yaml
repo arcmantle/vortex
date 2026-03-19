@@ -1,0 +1,7 @@
+name: alpha-smoke
+
+jobs:
+  - id: keepalive
+    label: Alpha Keepalive
+    command: tail -f /dev/null
+    group: smoke

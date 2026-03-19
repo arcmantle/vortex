@@ -2,8 +2,11 @@
 
 package terminal
 
-import "os/exec"
+import (
+	"os/exec"
+	"syscall"
+)
 
 func setChildFlags(cmd *exec.Cmd) {
-	// No-op on non-Windows platforms.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }

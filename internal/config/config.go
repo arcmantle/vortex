@@ -25,6 +25,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -61,6 +62,7 @@ func (j JobSpec) ShouldRestart() bool {
 
 // Config is the top-level structure of a vortex.yaml file.
 type Config struct {
+	Name string    `yaml:"name"`
 	Jobs []JobSpec `yaml:"jobs"`
 }
 
@@ -74,12 +76,16 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	if strings.TrimSpace(cfg.Name) == "" {
+		return nil, fmt.Errorf("config is missing a required top-level name field")
+	}
 	if len(cfg.Jobs) == 0 {
 		return nil, fmt.Errorf("config defines no jobs")
 	}
 	// Validate: all IDs non-empty and unique.
 	seen := make(map[string]struct{}, len(cfg.Jobs))
-	for _, j := range cfg.Jobs {
+	for i := range cfg.Jobs {
+		j := &cfg.Jobs[i]
 		if j.ID == "" {
 			return nil, fmt.Errorf("a job is missing an id field")
 		}

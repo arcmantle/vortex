@@ -2,9 +2,21 @@
 
 package terminal
 
-import "syscall"
+import (
+	"errors"
+	"syscall"
+)
 
 // killProcessTree kills a process and all its children via process group.
 func killProcessTree(pid int) error {
-	return syscall.Kill(-pid, syscall.SIGKILL)
+	err := syscall.Kill(-pid, syscall.SIGKILL)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		if fallbackErr := syscall.Kill(pid, syscall.SIGKILL); fallbackErr == nil || errors.Is(fallbackErr, syscall.ESRCH) {
+			return nil
+		}
+	}
+	return err
 }

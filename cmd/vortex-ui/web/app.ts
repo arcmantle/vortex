@@ -164,6 +164,7 @@ export class VortexApp extends LitElement {
   @state() private _activeId = '';
   @state() private _activeGroup = '';
   @state() private _closedIds = new Set<string>();
+  @state() private _instanceName = 'Vortex';
   private _gen = -1;
 
   connectedCallback(): void {
@@ -176,7 +177,15 @@ export class VortexApp extends LitElement {
     try {
       const res = await fetch(`${API_BASE}/api/terminals`);
       if (!res.ok) return;
-      const body = (await res.json()) as { gen: number; terminals: TerminalInfo[] };
+      const body = (await res.json()) as {
+        instance?: { name?: string };
+        gen: number;
+        terminals: TerminalInfo[];
+      };
+      if (body.instance?.name) {
+        this._instanceName = body.instance.name;
+        document.title = `Vortex - ${body.instance.name}`;
+      }
       const terms = body.terminals;
       // Detect orchestrator restart via generation counter — clear closed tabs.
       if (body.gen !== this._gen) {
@@ -272,6 +281,9 @@ export class VortexApp extends LitElement {
 
     return html`
       <div class="header">
+        <div class="tab-bar">
+          <button class="active" type="button">${this._instanceName}</button>
+        </div>
         ${this._showGroupBar
           ? html`
             <div class="group-bar">
