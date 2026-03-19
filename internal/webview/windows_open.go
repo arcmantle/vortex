@@ -17,14 +17,28 @@ static void setWindowIcon(void *hwnd) {
 */
 import "C"
 
-import webview "github.com/webview/webview_go"
+import (
+	"context"
 
-func open(title, url string, width, height int) {
+	webview "github.com/webview/webview_go"
+)
+
+func init() {
+	openWithContextImpl = openNativeWithContext
+}
+
+func openNativeWithContext(ctx context.Context, title, url string, width, height int) {
 	w := webview.New(false)
 	if w == nil {
 		return
 	}
 	defer w.Destroy()
+	if ctx != nil {
+		go func() {
+			<-ctx.Done()
+			w.Terminate()
+		}()
+	}
 	w.SetTitle(title)
 	w.SetSize(width, height, webview.HintNone)
 	C.setWindowIcon(w.Window())

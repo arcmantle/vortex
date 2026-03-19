@@ -16,11 +16,17 @@ import (
 
 const defaultHandoffPort = 7371
 
+const (
+	handoffActionRestart = "restart"
+	handoffActionQuit    = "quit"
+)
+
 // HandoffPort is the port used for the single-instance handoff channel.
 var HandoffPort = defaultHandoffPort
 
 // HandoffPayload is the JSON body sent to an already-running instance.
 type HandoffPayload struct {
+	Action     string   `json:"action,omitempty"`
 	Args       []string `json:"args"`
 	ConfigFile string   `json:"config_file,omitempty"`
 }
@@ -41,10 +47,29 @@ func TryLock() (net.Listener, bool, error) {
 
 // Forward sends args to the running instance and waits for an acknowledgement.
 func Forward(configFile string, args []string) error {
-	payload, err := json.Marshal(HandoffPayload{ConfigFile: configFile, Args: args})
+	payload, err := json.Marshal(HandoffPayload{
+		Action:     handoffActionRestart,
+		ConfigFile: configFile,
+		Args:       args,
+	})
 	if err != nil {
 		return err
 	}
+
+	return postHandoff(payload)
+}
+
+// Quit asks the running instance to shut down.
+func Quit() error {
+	payload, err := json.Marshal(HandoffPayload{Action: handoffActionQuit})
+	if err != nil {
+		return err
+	}
+
+	return postHandoff(payload)
+}
+
+func postHandoff(payload []byte) error {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	url := fmt.Sprintf("http://127.0.0.1:%d/handoff", HandoffPort)
@@ -61,7 +86,7 @@ func Forward(configFile string, args []string) error {
 
 // ServeHandoff starts an HTTP server on the instance-lock listener that accepts
 // POST /handoff. This makes the lock port double as the handoff channel.
-func ServeHandoff(l net.Listener, handler func(configFile string, args []string)) {
+func ServeHandoff(l net.Listener, handler func(HandoffPayload)) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /handoff", func(w http.ResponseWriter, r *http.Request) {
 		var payload HandoffPayload
@@ -70,7 +95,7 @@ func ServeHandoff(l net.Listener, handler func(configFile string, args []string)
 			return
 		}
 		if handler != nil {
-			go handler(payload.ConfigFile, payload.Args)
+			go handler(payload)
 		}
 		w.WriteHeader(http.StatusOK)
 	})

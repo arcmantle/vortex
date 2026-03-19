@@ -3,14 +3,14 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
 
 permissions:
   contents: write
 
 env:
-  GO_VERSION: "1.24"
-  NODE_VERSION: "22"
+  GO_VERSION: '1.24'
+  NODE_VERSION: '22'
 
 jobs:
   # ── Build the frontend UI and upload as artifact ──────────────────────
@@ -91,6 +91,30 @@ jobs:
             -commit "$COMMIT" \
             -output "${{ matrix.binary }}"
 
+      - name: Smoke test embedded UI
+        shell: bash
+        run: |
+          ./${{ matrix.binary }} --headless --port 7370 > smoke.log 2>&1 &
+          app_pid=$!
+          success=0
+
+          for _ in {1..30}; do
+            if curl --silent --show-error --fail http://127.0.0.1:7370/ | grep -qi '<!doctype html>'; then
+              success=1
+              break
+            fi
+            sleep 1
+          done
+
+          ./${{ matrix.binary }} --quit || true
+          wait "$app_pid" || true
+
+          if [[ "$success" -ne 1 ]]; then
+            cat smoke.log
+            echo "smoke test failed: embedded UI root did not respond"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}
@@ -107,6 +131,11 @@ jobs:
           path: artifacts/
           pattern: vortex-*
           merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum vortex-* > vortex-checksums.txt
 
       - name: List artifacts
         run: ls -lR artifacts/

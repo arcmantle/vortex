@@ -19,17 +19,28 @@ static void setAppIcon(const void *data, int len) {
 import "C"
 
 import (
+	"context"
 	"unsafe"
 
 	webview "github.com/webview/webview_go"
 )
 
-func open(title, url string, width, height int) {
+func init() {
+	openWithContextImpl = openNativeWithContext
+}
+
+func openNativeWithContext(ctx context.Context, title, url string, width, height int) {
 	w := webview.New(false)
 	if w == nil {
 		return
 	}
 	defer w.Destroy()
+	if ctx != nil {
+		go func() {
+			<-ctx.Done()
+			w.Terminate()
+		}()
+	}
 	w.SetTitle(title)
 	w.SetSize(width, height, webview.HintNone)
 	C.setAppIcon(unsafe.Pointer(&iconPNG[0]), C.int(len(iconPNG)))

@@ -61,9 +61,9 @@ Each job supports:
 |-----------|------------|-------------------------------------------------------------------------|
 | `id`      | `string`   | **Required.** Unique identifier, used in `needs` references.            |
 | `label`   | `string`   | Display name in the UI. Defaults to `id`.                               |
-| `command` | `string`   | **Required.** Shell command to execute (space-separated with args).      |
-| `group`   | `string`   | Optional group name — jobs in the same group are visually grouped.       |
-| `needs`   | `string[]` | IDs of jobs that must complete before this one starts.                   |
+| `command` | `string`   | **Required.** Shell command to execute (space-separated with args).     |
+| `group`   | `string`   | Optional group name — jobs in the same group are visually grouped.      |
+| `needs`   | `string[]` | IDs of jobs that must complete before this one starts.                  |
 | `if`      | `string`   | When to run: `success` (default), `failure`, or `always`.               |
 | `restart` | `bool`     | Whether to kill and re-launch on restart. Defaults to `true`.           |
 
@@ -71,6 +71,7 @@ Each job supports:
 
 ```
 vortex [flags] [config.yaml | -- label:command ...]
+vortex upgrade
 ```
 
 | Flag       | Default | Description                                             |
@@ -78,6 +79,47 @@ vortex [flags] [config.yaml | -- label:command ...]
 | `--config` | —       | Path to YAML config file                                |
 | `--port`   | `7370`  | HTTP port for the API / SSE server                      |
 | `--dev`    | `false` | Skip the native webview; use a browser instead          |
+| `--headless` | `false` | Serve embedded UI without opening a native window     |
+| `--quit`   | `false` | Ask the running Vortex instance to shut down and exit   |
+
+To stop a running instance from the CLI:
+
+```sh
+go run ./cmd/vortex --quit
+```
+
+To upgrade to the latest GitHub release and install it into a managed location:
+
+```sh
+vortex upgrade
+```
+
+To check whether a newer release is available without changing anything:
+
+```sh
+vortex upgrade --check
+```
+
+Managed install locations:
+
+- macOS/Linux: `~/.local/bin/vortex`
+- Windows: `%LOCALAPPDATA%\Programs\Vortex\vortex.exe`
+
+The `upgrade` command will:
+
+- download the latest release asset for your current OS/architecture
+- verify the downloaded binary against the release SHA-256 checksum file
+- stop a running Vortex instance before replacing the installed binary
+- place the binary into the managed install location if it is not already there
+- attempt to add that install directory to your user PATH automatically
+
+If your shell was updated, open a new terminal session so the new PATH is loaded.
+
+For CI or smoke tests, you can serve the embedded UI without opening a native window:
+
+```sh
+go run -tags embed_ui ./cmd/vortex --headless
+```
 
 ## Building
 
@@ -100,6 +142,17 @@ cd cmd/vortex-ui/web && pnpm install && pnpm dev
 
 The Vite dev server proxies API calls to the Go server. Run vortex with `--dev` to skip the webview and use the browser at `http://localhost:5173`.
 
+To test the native window from source, build the frontend and use the embedded-UI tag:
+
+```sh
+cd cmd/vortex-ui/web
+pnpm install
+pnpm build
+
+cd ../../..
+go run -tags embed_ui ./cmd/vortex --config mock/dev.yaml
+```
+
 ### Production binary
 
 ```sh
@@ -116,6 +169,13 @@ On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching termi
 
 ```sh
 go build -tags embed_ui -o vortex ./cmd/vortex
+```
+
+If you download the Darwin release binary directly from GitHub, make it executable and remove the quarantine attribute before first launch:
+
+```sh
+chmod +x ./vortex-darwin-arm64
+xattr -d com.apple.quarantine ./vortex-darwin-arm64 2>/dev/null || true
 ```
 
 The `embed_ui` build tag embeds the compiled frontend into the binary. Without it, the UI is not served (useful for dev mode).

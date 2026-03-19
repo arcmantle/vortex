@@ -8,6 +8,10 @@
 //
 //	vortex [--dev] [--port <n>] -- <label:command> [<label:command> ...]
 //
+// Usage (self-update):
+//
+//	vortex upgrade
+//
 // The YAML config file defines jobs with optional groups and dependency
 // conditions. See internal/config/config.go for the full schema.
 //
@@ -21,6 +25,7 @@
 //
 //	--dev   Do not open the webview. The Go server is still started so the
 //	        Vite dev server can proxy /api/* and /events to it.
+//	--headless  Serve the embedded UI without opening a native window.
 //	--port  HTTP port for the Go server (default 7370).
 package main
 
@@ -32,6 +37,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -39,6 +45,7 @@ import (
 	"arcmantle/vortex/internal/instance"
 	"arcmantle/vortex/internal/orchestrator"
 	"arcmantle/vortex/internal/server"
+	"arcmantle/vortex/internal/upgrade"
 	"arcmantle/vortex/internal/webview"
 )
 
@@ -50,13 +57,39 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "upgrade" {
+		if err := upgrade.Run(os.Args[2:], upgrade.Options{CurrentVersion: Version}); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	dev := flag.Bool("dev", false, "dev mode: skip webview, keep API server running")
+	headless := flag.Bool("headless", false, "serve embedded UI without opening a native window")
 	port := flag.Int("port", 7370, "HTTP port for the Go server")
 	configFile := flag.String("config", "", "path to YAML config file")
+	quit := flag.Bool("quit", false, "ask the running instance to shut down and exit")
 	forked := flag.Bool("forked", false, "internal: already running in a detached session")
 	flag.Parse()
 
 	args := flag.Args()
+
+	if *quit {
+		l, first, err := instance.TryLock()
+		if err != nil {
+			log.Fatalf("instance lock error: %v", err)
+		}
+		if first {
+			l.Close()
+			fmt.Println("No active Vortex instance.")
+			return
+		}
+		if err := instance.Quit(); err != nil {
+			log.Fatalf("shutdown request failed: %v", err)
+		}
+		fmt.Println("Requested shutdown of existing instance.")
+		return
+	}
 
 	// --- Single-instance check ---
 	l, first, err := instance.TryLock()
@@ -74,7 +107,7 @@ func main() {
 
 	// On macOS/Linux, fork into a new session so the terminal is freed.
 	// On Windows this is a no-op (handled by -H=windowsgui at build time).
-	if !*dev && !*forked {
+	if !*dev && !*headless && !*forked {
 		if maybeFork() {
 			l.Close()
 			return
@@ -97,9 +130,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	onHandoff := func(configFile string, handoffArgs []string) {
-		log.Printf("Second instance connected with args: %v", handoffArgs)
-		handoffCfg, err := loadConfig(configFile, handoffArgs)
+	onHandoff := func(payload instance.HandoffPayload) {
+		if payload.Action == "quit" {
+			log.Printf("Shutdown requested by CLI handoff")
+			stop()
+			return
+		}
+
+		log.Printf("Second instance connected with args: %v", payload.Args)
+		handoffCfg, err := loadConfig(payload.ConfigFile, payload.Args)
 		if err != nil {
 			log.Printf("handoff config error: %v", err)
 			return
@@ -112,7 +151,12 @@ func main() {
 	// listener accepts connections but never speaks HTTP, causing timeouts.
 	instance.ServeHandoff(l, onHandoff)
 
-	srv := server.New(orch, uiFS(), nil, *dev, "http://localhost:5173")
+	static := uiFS()
+	if !*dev && static == nil {
+		log.Fatal("non-dev mode requires embedded UI assets; run pnpm build in cmd/vortex-ui/web and start with go run -tags embed_ui ./cmd/vortex ..., or use --dev")
+	}
+
+	srv := server.New(orch, static, nil, *dev, "http://localhost:5173")
 	addr := fmt.Sprintf("127.0.0.1:%d", *port)
 
 	// Start all jobs according to their dependency graph.
@@ -126,11 +170,29 @@ func main() {
 	}()
 
 	if !*dev {
-		// Open webview in background; when the window is closed, cancel ctx.
-		go func() {
-			webview.Open("Vortex", fmt.Sprintf("http://%s", addr), 1280, 800)
+		if *headless {
+			log.Printf("Headless mode: open http://%s in your browser if needed", addr)
+		} else if runtime.GOOS == "darwin" {
+			go func() {
+				select {
+				case err := <-serverErr:
+					if err != nil {
+						log.Printf("server error: %v", err)
+					}
+					stop()
+				case <-ctx.Done():
+				}
+			}()
+
+			webview.OpenWithContext(ctx, "Vortex", fmt.Sprintf("http://%s", addr), 1280, 800)
 			stop()
-		}()
+		} else {
+			// Open webview in background; when the window is closed, cancel ctx.
+			go func() {
+				webview.OpenWithContext(ctx, "Vortex", fmt.Sprintf("http://%s", addr), 1280, 800)
+				stop()
+			}()
+		}
 	} else {
 		log.Printf("Dev mode: open http://%s in your browser (or use the Vite dev server)", addr)
 	}
@@ -215,4 +277,3 @@ func parseSpecs(rawArgs []string) []processSpec {
 	}
 	return specs
 }
-
