@@ -2,6 +2,7 @@ import { LitElement, html, css, unsafeCSS, PropertyValues } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 
 export interface TerminalInfo {
@@ -21,6 +22,10 @@ export interface LineDTO {
 // Always use relative URLs so Vite's proxy (in dev) or the embedded server (in prod)
 // handles routing. Never hardcode the Go server address from the browser.
 const API_BASE = '';
+
+type NativeBrowserBridge = {
+	vortexOpenExternal?: (url: string) => Promise<unknown>;
+};
 
 // ---------------------------------------------------------------------------
 // vortex-terminal — xterm.js pane connected to one process via SSE
@@ -72,6 +77,9 @@ export class VortexTerminal extends LitElement {
 			fontFamily: 'Consolas, "Courier New", monospace',
 			fontSize: 13,
 		});
+		this._term.loadAddon(new WebLinksAddon((_event, uri) => {
+			void openExternalLink(uri);
+		}));
 		this._term.loadAddon(this._fitAddon);
 		this._term.open(wrap);
 		this._inputDisposable = this._term.onData((data) => {
@@ -213,4 +221,14 @@ function encodeBase64(data: string): string {
 		binary += String.fromCharCode(value);
 	}
 	return btoa(binary);
+}
+
+async function openExternalLink(url: string): Promise<void> {
+	const nativeBridge = (globalThis as typeof globalThis & NativeBrowserBridge).vortexOpenExternal;
+	if (typeof nativeBridge === 'function') {
+		await nativeBridge(url);
+		return;
+	}
+
+	window.open(url, '_blank', 'noopener,noreferrer');
 }

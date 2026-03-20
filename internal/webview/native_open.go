@@ -4,6 +4,7 @@ package webview
 
 import (
 	"context"
+	"log"
 
 	webviewlib "github.com/webview/webview_go"
 )
@@ -24,6 +25,11 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 	w.SetTitle(title)
 	w.SetSize(width, height, webviewlib.HintNone)
 	controller.setIcon(iconPNG)
+	if err := w.Bind("vortexOpenExternal", func(target string) error {
+		return openExternalURL(target)
+	}); err != nil {
+		log.Printf("webview external browser bridge bind failed: %v", err)
+	}
 	w.Navigate(url)
 	controller.Focus()
 	if onReady != nil {
