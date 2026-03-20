@@ -88,8 +88,8 @@ Each job supports:
 |-----------|------------|-------------------------------------------------------------------------|
 | `id`      | `string`   | **Required.** Unique identifier, used in `needs` references.            |
 | `label`   | `string`   | Display name in the UI. Defaults to `id`.                               |
-| `shell`   | `string`   | Optional interpreter for script blocks. Supports `bash`, `sh`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `python`, `python3`, `node`, `deno`, and `bun`. |
-| `command` | `string`   | **Required.** Direct command line when `shell` is omitted, or script text when `shell` is set. |
+| `shell`   | `string \| object` | Optional interpreter for script blocks. Accepts either a plain shell string or an OS selector object with `darwin`, `linux`, `windows`, and `default` keys. |
+| `command` | `string \| object` | **Required.** Direct command line when `shell` is omitted, or script text when `shell` is set. Accepts either a plain string or an OS selector object with `darwin`, `linux`, `windows`, and `default` keys. |
 | `group`   | `string`   | Optional group name — jobs in the same group are visually grouped.      |
 | `needs`   | `string[]` | IDs of jobs that must complete before this one starts.                  |
 | `if`      | `string`   | When to run: `success` (default), `failure`, or `always`.               |
@@ -173,6 +173,26 @@ Important command-specific flags:
 
 When `shell` is omitted, Vortex executes `command` directly by splitting it into argv.
 When `shell` is set, Vortex passes `command` as a script block to that interpreter.
+
+Both `shell` and `command` can also be OS-specific objects. Vortex resolves them for the current runtime OS using these keys:
+
+- `darwin`
+- `linux`
+- `windows`
+- `default`
+
+Example:
+
+```yaml
+jobs:
+  - id: cross-platform-smoke
+    shell:
+      default: bash
+      windows: pwsh
+    command:
+      default: echo hello from vortex
+      windows: Write-Host hello from vortex
+```
 
 By default, Vortex runs every job with the working directory set to the directory containing the `.vortex` file.
 Use `--cwd` to override that for the whole run.

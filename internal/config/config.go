@@ -25,10 +25,18 @@ package config
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+var supportedOSSelectors = map[string]struct{}{
+	"darwin":  {},
+	"linux":   {},
+	"windows": {},
+	"default": {},
+}
 
 // JobSpec describes a single job in the config.
 type JobSpec struct {
@@ -56,6 +64,45 @@ type JobSpec struct {
 	// Defaults to true. Set to false for long-running processes (e.g. dev
 	// servers) that should survive across config reloads.
 	Restart *bool `yaml:"restart"`
+}
+
+type rawJobSpec struct {
+	ID      string   `yaml:"id"`
+	Label   string   `yaml:"label"`
+	Group   string   `yaml:"group"`
+	Needs   []string `yaml:"needs"`
+	If      string   `yaml:"if"`
+	Restart *bool    `yaml:"restart"`
+}
+
+// UnmarshalYAML accepts either a plain string or an OS-keyed object for the
+// shell and command fields, then resolves the value for the current runtime OS.
+func (j *JobSpec) UnmarshalYAML(node *yaml.Node) error {
+	var raw rawJobSpec
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+
+	command, err := resolveOSValue(mappingValueNode(node, "command"), "command")
+	if err != nil {
+		return err
+	}
+	shell, err := resolveOSValue(mappingValueNode(node, "shell"), "shell")
+	if err != nil {
+		return err
+	}
+
+	*j = JobSpec{
+		ID:      raw.ID,
+		Label:   raw.Label,
+		Shell:   shell,
+		Command: command,
+		Group:   raw.Group,
+		Needs:   raw.Needs,
+		If:      raw.If,
+		Restart: raw.Restart,
+	}
+	return nil
 }
 
 // ShouldRestart returns whether this job should be killed and re-launched on
@@ -118,6 +165,58 @@ func (j JobSpec) CommandLine() (string, []string, error) {
 
 func normalizeShellName(shell string) string {
 	return strings.ToLower(strings.TrimSpace(shell))
+}
+
+func mappingValueNode(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return node.Content[index+1]
+		}
+	}
+	return nil
+}
+
+func resolveOSValue(node *yaml.Node, field string) (string, error) {
+	if node == nil {
+		return "", nil
+	}
+
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var value string
+		if err := node.Decode(&value); err != nil {
+			return "", fmt.Errorf("%s must be a string", field)
+		}
+		return value, nil
+	case yaml.MappingNode:
+		var values map[string]string
+		if err := node.Decode(&values); err != nil {
+			return "", fmt.Errorf("%s OS selector must be an object of strings: %w", field, err)
+		}
+		if len(values) == 0 {
+			return "", fmt.Errorf("%s OS selector must not be empty", field)
+		}
+		normalized := make(map[string]string, len(values))
+		for key := range values {
+			normalizedKey := strings.ToLower(strings.TrimSpace(key))
+			if _, ok := supportedOSSelectors[normalizedKey]; !ok {
+				return "", fmt.Errorf("%s uses unsupported OS key %q; supported keys: darwin, linux, windows, default", field, key)
+			}
+			normalized[normalizedKey] = values[key]
+		}
+		if value, ok := normalized[runtime.GOOS]; ok {
+			return value, nil
+		}
+		if value, ok := normalized["default"]; ok {
+			return value, nil
+		}
+		return "", fmt.Errorf("%s does not define a value for %q and has no default", field, runtime.GOOS)
+	default:
+		return "", fmt.Errorf("%s must be either a string or an OS selector object", field)
+	}
 }
 
 // Config is the top-level structure of a Vortex config file.

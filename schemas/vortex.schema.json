@@ -49,9 +49,74 @@
 					}
 				]
 			}
+		},
+		{
+			"label": "OS-specific command",
+			"body": {
+				"name": "$1",
+				"jobs": [
+					{
+						"id": "$2",
+						"shell": {
+							"default": "bash",
+							"windows": "pwsh"
+						},
+						"command": {
+							"default": "echo hello from vortex",
+							"windows": "Write-Host hello from vortex"
+						}
+					}
+				]
+			}
 		}
 	],
 	"definitions": {
+		"shellName": {
+			"type": "string",
+			"enum": [
+				"bash",
+				"sh",
+				"zsh",
+				"fish",
+				"cmd",
+				"powershell",
+				"pwsh",
+				"python",
+				"python3",
+				"node",
+				"deno",
+				"bun"
+			]
+		},
+		"osSelectorKeys": {
+			"enum": [
+				"darwin",
+				"linux",
+				"windows",
+				"default"
+			]
+		},
+		"shellSelector": {
+			"type": "object",
+			"minProperties": 1,
+			"propertyNames": {
+				"$ref": "#/definitions/osSelectorKeys"
+			},
+			"additionalProperties": {
+				"$ref": "#/definitions/shellName"
+			}
+		},
+		"commandSelector": {
+			"type": "object",
+			"minProperties": 1,
+			"propertyNames": {
+				"$ref": "#/definitions/osSelectorKeys"
+			},
+			"additionalProperties": {
+				"type": "string",
+				"minLength": 1
+			}
+		},
 		"job": {
 			"type": "object",
 			"additionalProperties": false,
@@ -72,26 +137,26 @@
 					"description": "Human-readable job label shown in the UI."
 				},
 				"shell": {
-					"type": "string",
-					"enum": [
-						"bash",
-						"sh",
-						"zsh",
-						"fish",
-						"cmd",
-						"powershell",
-						"pwsh",
-						"python",
-						"python3",
-						"node",
-						"deno",
-						"bun"
+					"oneOf": [
+						{
+							"$ref": "#/definitions/shellName"
+						},
+						{
+							"$ref": "#/definitions/shellSelector"
+						}
 					],
 					"description": "Optional interpreter used for command script blocks."
 				},
 				"command": {
-					"type": "string",
-					"minLength": 1,
+					"oneOf": [
+						{
+							"type": "string",
+							"minLength": 1
+						},
+						{
+							"$ref": "#/definitions/commandSelector"
+						}
+					],
 					"description": "Command line when shell is omitted, or script text when shell is set."
 				},
 				"group": {
@@ -140,6 +205,17 @@
 					"needs": [
 						"build"
 					]
+				},
+				{
+					"id": "cross-platform",
+					"shell": {
+						"default": "bash",
+						"windows": "pwsh"
+					},
+					"command": {
+						"default": "echo hello",
+						"windows": "Write-Host hello"
+					}
 				}
 			]
 		}

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,68 @@ func TestLoadRejectsUnsupportedShell(t *testing.T) {
 	_, err := Load(path)
 	if err == nil || !contains(err.Error(), "unsupported shell") {
 		t.Fatalf("Load() error = %v, want unsupported shell", err)
+	}
+}
+
+func TestLoadResolvesOSSpecificCommandAndShell(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dev.vortex")
+	data := []byte("name: dev\njobs:\n  - id: smoke\n    shell:\n      default: bash\n      windows: pwsh\n    command:\n      default: echo hello\n      windows: Write-Host hello\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Jobs) != 1 {
+		t.Fatalf("Load() jobs len = %d, want 1", len(cfg.Jobs))
+	}
+
+	job := cfg.Jobs[0]
+	if runtime.GOOS == "windows" {
+		if job.Shell != "pwsh" || job.Command != "Write-Host hello" {
+			t.Fatalf("windows resolution = shell %q command %q", job.Shell, job.Command)
+		}
+		return
+	}
+	if job.Shell != "bash" || job.Command != "echo hello" {
+		t.Fatalf("default resolution = shell %q command %q", job.Shell, job.Command)
+	}
+}
+
+func TestLoadRejectsUnsupportedOSSelectorKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dev.vortex")
+	data := []byte("name: dev\njobs:\n  - id: smoke\n    command:\n      plan9: echo hello\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !contains(err.Error(), "unsupported OS key") {
+		t.Fatalf("Load() error = %v, want unsupported OS key", err)
+	}
+}
+
+func TestLoadRejectsMissingCurrentOSAndDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dev.vortex")
+	selector := "darwin: echo hello\n      windows: Write-Host hello"
+	if runtime.GOOS == "darwin" {
+		selector = "linux: echo hello\n      windows: Write-Host hello"
+	} else if runtime.GOOS == "windows" {
+		selector = "darwin: echo hello\n      linux: echo hello"
+	}
+	data := []byte("name: dev\njobs:\n  - id: smoke\n    command:\n      " + selector + "\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !contains(err.Error(), "has no default") {
+		t.Fatalf("Load() error = %v, want missing current OS/default", err)
 	}
 }
 
