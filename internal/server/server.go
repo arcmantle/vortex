@@ -16,12 +16,15 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"arcmantle/vortex/internal/instance"
 	"arcmantle/vortex/internal/orchestrator"
 	"arcmantle/vortex/internal/terminal"
+	"arcmantle/vortex/internal/webview"
 )
 
 // HandoffHandler is called when a second instance forwards its arguments.
@@ -76,6 +79,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/terminals/{id}/rerun", s.handleRerunTerminal)
 	mux.HandleFunc("POST /api/terminals/{id}/size", s.handleResizeTerminal)
 	mux.HandleFunc("DELETE /api/terminals/{id}/buffer", s.handleClearBuffer)
+	mux.HandleFunc("POST /api/open-path", s.handleOpenPath)
 	mux.HandleFunc("POST /handoff", s.handleHandoff)
 
 	if !s.devMode {
@@ -298,6 +302,16 @@ type terminalInputRequest struct {
 	Data string `json:"data"`
 }
 
+type openPathRequest struct {
+	Path string `json:"path"`
+}
+
+type openPathTarget struct {
+	Path   string
+	Line   int
+	Column int
+}
+
 func (s *Server) handleKillProcesses(w http.ResponseWriter, r *http.Request) {
 	killed := 0
 	for _, job := range s.orch.AllJobs() {
@@ -437,6 +451,25 @@ func (s *Server) handleClearBuffer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {
+	var req openPathRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	target, err := resolveOpenPathTarget(s.orch.WorkDir(), req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := webview.OpenPathInEditor(webview.OpenFileTarget{Path: target.Path, Line: target.Line, Column: target.Column}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	var payload instance.HandoffPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -477,6 +510,120 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+func resolveOpenPathTarget(workDir, rawPath string) (openPathTarget, error) {
+	target := parseTerminalPath(rawPath)
+	if target.Path == "" {
+		return openPathTarget{}, fmt.Errorf("path must not be empty")
+	}
+	path := target.Path
+
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return openPathTarget{}, fmt.Errorf("resolve home directory: %w", err)
+		}
+		if path == "~" {
+			path = home
+		} else {
+			path = filepath.Join(home, path[2:])
+		}
+	}
+
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+
+	target.Path = filepath.Clean(path)
+	return target, nil
+}
+
+func parseTerminalPath(raw string) openPathTarget {
+	path := strings.TrimSpace(raw)
+	path = strings.Trim(path, "\"'`()[]{}<>,")
+	path = strings.TrimPrefix(path, "file://")
+
+	line := 0
+	column := 0
+	trimmed, maybeColumn := trimTrailingNumber(path)
+	if maybeColumn > 0 {
+		prev, maybeLine := trimTrailingNumber(trimmed)
+		if maybeLine > 0 {
+			path = prev
+			line = maybeLine
+			column = maybeColumn
+		} else {
+			path = trimmed
+			line = maybeColumn
+		}
+	}
+
+	return openPathTarget{Path: path, Line: line, Column: column}
+}
+
+func trimTrailingNumber(path string) (string, int) {
+	last := strings.LastIndex(path, ":")
+	if last < 0 {
+		return path, 0
+	}
+	segment := path[last+1:]
+	if !isDigits(segment) {
+		return path, 0
+	}
+	prefix := path[:last]
+	if len(prefix) == 1 && path[1] == ':' {
+		return path, 0
+	}
+	value := 0
+	for _, r := range segment {
+		value = value*10 + int(r-'0')
+	}
+	return prefix, value
+}
+
+func resolveRevealPath(workDir, rawPath string) (string, error) {
+	target, err := resolveOpenPathTarget(workDir, rawPath)
+	if err != nil {
+		return "", fmt.Errorf("path must not be empty")
+	}
+	return target.Path, nil
+}
+
+func normalizeTerminalPath(raw string) string {
+	return parseTerminalPath(raw).Path
+}
+
+func stripLineColumnSuffix(path string) string {
+	trimmed := path
+	last := strings.LastIndex(trimmed, ":")
+	if last < 0 {
+		return trimmed
+	}
+	if !isDigits(trimmed[last+1:]) {
+		return trimmed
+	}
+	trimmed = trimmed[:last]
+	last = strings.LastIndex(trimmed, ":")
+	if last >= 0 && isDigits(trimmed[last+1:]) {
+		trimmed = trimmed[:last]
+	}
+	if len(trimmed) == 2 && trimmed[1] == ':' {
+		return path
+	}
+	return trimmed
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ListenAndServe starts the HTTP server on addr and blocks until ctx is done.

@@ -99,3 +99,24 @@ func TestCwdFromRunArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldDetachFromTerminal(t *testing.T) {
+	tests := []struct {
+		name string
+		opts cliOptions
+		want bool
+	}{
+		{name: "windowed release", opts: cliOptions{}, want: true},
+		{name: "headless release", opts: cliOptions{headless: true}, want: true},
+		{name: "dev mode", opts: cliOptions{dev: true}, want: false},
+		{name: "already forked", opts: cliOptions{forked: true}, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldDetachFromTerminal(tc.opts); got != tc.want {
+				t.Fatalf("shouldDetachFromTerminal(%+v) = %v, want %v", tc.opts, got, tc.want)
+			}
+		})
+	}
+}

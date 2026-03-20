@@ -35,6 +35,7 @@ func rootCommand() *cobra.Command {
 	cmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "Show the current version")
 
 	cmd.AddCommand(runCommand())
+	cmd.AddCommand(configCommand())
 	cmd.AddCommand(instanceCommand())
 	cmd.AddCommand(initCommand())
 	cmd.AddCommand(versionCommand())

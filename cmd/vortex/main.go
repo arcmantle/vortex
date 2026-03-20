@@ -130,9 +130,10 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 		return nil
 	}
 
-	// On macOS/Linux, fork into a new session so the terminal is freed.
-	// On Windows this is a no-op (handled by -H=windowsgui at build time).
-	if !opts.dev && !opts.headless && !opts.forked {
+	// Non-dev launches detach from the caller's terminal. On Unix this forks
+	// into a new session. On Windows, GUI-subsystem builds already start
+	// detached and console-attached launches respawn without the console.
+	if shouldDetachFromTerminal(opts) {
 		if maybeFork() {
 			l.Close()
 			return nil
@@ -502,6 +503,10 @@ type cliOptions struct {
 	cwd         string
 	configFile  string
 	positionals []string
+}
+
+func shouldDetachFromTerminal(opts cliOptions) bool {
+	return !opts.dev && !opts.forked
 }
 
 func loadConfigFile(configPath string, args []string) (*config.Config, string, error) {

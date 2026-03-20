@@ -10,6 +10,7 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 
 - **Dependency-aware execution** — jobs declare what they `needs`, with conditions (`success`, `failure`, `always`) inspired by GitHub Actions
 - **Live terminal output** — each job streams stdout/stderr into its own xterm.js terminal panel via SSE
+- **Clickable terminal links** — `http` and `https` URLs open in your external browser, and file paths open in your editor using `vortex config set editor ...`, `VORTEX_EDITOR`, `VISUAL`, or `EDITOR`
 - **Native webview** — opens as a standalone desktop window (Edge WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux)
 - **Job groups** — organize related jobs under collapsible groups in the UI
 - **Named instances** — every Vortex config declares a required `name`, and Vortex routes restart / quit commands to that specific running instance
@@ -138,6 +139,10 @@ For SchemaStore submission, the schema itself also needs a stable public URL and
 
 ```
 vortex help
+vortex config list
+vortex config get [key]
+vortex config set <key> <value>
+vortex config unset <key>
 vortex init [path] [--force]
 vortex run [--dev] [--headless] [--port <n>] [--cwd <path>] [--config <path>] [config-file]
 vortex docs [--force] [--no-open]
@@ -170,6 +175,35 @@ Important command-specific flags:
 | `--no-open` | `docs` | Generate docs without opening a browser |
 
 `name` is mandatory. Unnamed configs fail validation.
+
+Vortex also stores user-level settings in its own config file. The supported keys are `browser` and `editor`.
+
+```sh
+vortex config list
+vortex config set browser "firefox"
+vortex config set editor "code"
+vortex config get browser
+vortex config get editor
+vortex config unset browser
+vortex config unset editor
+```
+
+When an `http` or `https` terminal link is clicked, Vortex resolves the browser in this order:
+
+- `VORTEX_BROWSER`
+- saved `browser` setting from `vortex config set`
+- `BROWSER`
+
+If none of those are set, Vortex falls back to the operating system's default browser opener.
+
+When a terminal file path is clicked, Vortex resolves the editor in this order:
+
+- `VORTEX_EDITOR`
+- saved `editor` setting from `vortex config set`
+- `VISUAL`
+- `EDITOR`
+
+If none of those are set, Vortex falls back to the operating system's default file opener.
 
 When `shell` is omitted, Vortex executes `command` directly by splitting it into argv.
 When `shell` is set, Vortex passes `command` as a script block to that interpreter.
@@ -362,7 +396,7 @@ pnpm build
 go build -tags embed_ui -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
 ```
 
-On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. On macOS/Linux, you can either use `build.go` or omit that flag with plain `go build`:
+On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. If you launch a console build instead, Vortex now re-spawns itself detached as a fallback. On macOS/Linux, you can either use `build.go` or omit that flag with plain `go build`:
 
 ```sh
 go build -tags embed_ui -o vortex ./cmd/vortex

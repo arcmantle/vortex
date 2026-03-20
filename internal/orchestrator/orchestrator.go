@@ -278,6 +278,13 @@ func (o *Orchestrator) Generation() int {
 	return o.gen
 }
 
+// WorkDir returns the working directory used for all jobs in this run.
+func (o *Orchestrator) WorkDir() string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.workDir
+}
+
 // AddAndStart adds a new simple job (no dependencies, no group) and starts it
 // immediately. Used when a second instance forwards args via handoff.
 func (o *Orchestrator) AddAndStart(ctx context.Context, id, label, command string, args []string) {

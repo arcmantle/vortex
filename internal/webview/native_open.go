@@ -26,7 +26,7 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 	w.SetSize(width, height, webviewlib.HintNone)
 	controller.setIcon(iconPNG)
 	if err := w.Bind("vortexOpenExternal", func(target string) error {
-		return openExternalURL(target)
+		return OpenExternalURL(target)
 	}); err != nil {
 		log.Printf("webview external browser bridge bind failed: %v", err)
 	}

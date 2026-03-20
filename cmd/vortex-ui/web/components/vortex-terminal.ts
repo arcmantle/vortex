@@ -27,6 +27,15 @@ type NativeBrowserBridge = {
 	vortexOpenExternal?: (url: string) => Promise<unknown>;
 };
 
+type FileLinkMatch = {
+	text: string;
+	path: string;
+	startIndex: number;
+	endIndex: number;
+};
+
+const FILE_PATH_PATTERN = /(?:^|[\s("'])((?:~\/|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])?(?:[^\s"'`()\[\]{}<>:]+[\\/])+[^\s"'`()\[\]{}<>:]+(?:\:\d+(?::\d+)?)?)/g;
+
 // ---------------------------------------------------------------------------
 // vortex-terminal — xterm.js pane connected to one process via SSE
 //
@@ -80,6 +89,22 @@ export class VortexTerminal extends LitElement {
 		this._term.loadAddon(new WebLinksAddon((_event, uri) => {
 			void openExternalLink(uri);
 		}));
+		this._term.registerLinkProvider({
+			provideLinks: (bufferLineNumber, callback) => {
+				const text = this._term?.buffer.active.getLine(bufferLineNumber - 1)?.translateToString(true) ?? '';
+				const matches = findFilePathMatches(text);
+				callback(matches.map((match) => ({
+					range: {
+						start: { x: match.startIndex + 1, y: bufferLineNumber },
+						end: { x: match.endIndex + 1, y: bufferLineNumber },
+					},
+					text: match.text,
+					activate: () => {
+						void revealTerminalPath(match.path);
+					},
+				})));
+			},
+		});
 		this._term.loadAddon(this._fitAddon);
 		this._term.open(wrap);
 		this._inputDisposable = this._term.onData((data) => {
@@ -231,4 +256,35 @@ async function openExternalLink(url: string): Promise<void> {
 	}
 
 	window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+async function revealTerminalPath(path: string): Promise<void> {
+	await fetch(`${API_BASE}/api/open-path`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ path }),
+	});
+}
+
+function findFilePathMatches(line: string): FileLinkMatch[] {
+	const matches: FileLinkMatch[] = [];
+	const regex = new RegExp(FILE_PATH_PATTERN);
+	for (;;) {
+		const result = regex.exec(line);
+		if (!result || result.index < 0) {
+			break;
+		}
+		const text = result[1];
+		if (!text || text.includes('://')) {
+			continue;
+		}
+		const startIndex = result.index + result[0].lastIndexOf(text);
+		matches.push({
+			text,
+			path: text,
+			startIndex,
+			endIndex: startIndex + text.length,
+		});
+	}
+	return matches;
 }
