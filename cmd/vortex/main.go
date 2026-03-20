@@ -14,8 +14,8 @@
 //	vortex instance quit <name>
 //	vortex instance kill <name>
 //	vortex instance rerun <name> <job-id>
-//	vortex instance show-ui <name>
-//	vortex instance hide-ui <name>
+//	vortex instance show <name>
+//	vortex instance hide <name>
 //
 // Usage (self-update):
 //
@@ -51,6 +51,7 @@ import (
 	"arcmantle/vortex/internal/orchestrator"
 	"arcmantle/vortex/internal/server"
 	"arcmantle/vortex/internal/webview"
+	"arcmantle/windowfocus"
 )
 
 // Version info, set via ldflags at build time.
@@ -231,6 +232,7 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 			focusUIWindow = func() bool { return false }
 			uiMu.Unlock()
 			if suppressStop {
+				windowfocus.HideApp()
 				if err := instance.SetUIState(identity, "hidden"); err != nil {
 					log.Printf("instance registry warning: %v", err)
 				}

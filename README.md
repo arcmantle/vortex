@@ -155,8 +155,8 @@ vortex instance list [name] [--json] [--prune]
 vortex instance quit [name] [--config <path>]
 vortex instance kill [name] [--config <path>]
 vortex instance rerun <name> <job-id>
-vortex instance show-ui [name] [--config <path>]
-vortex instance hide-ui [name] [--config <path>]
+vortex instance show [name] [--config <path>]
+vortex instance hide [name] [--config <path>]
 vortex upgrade [--check]
 ```
 
@@ -164,7 +164,7 @@ Important command-specific flags:
 
 | Flag | Applies To | Description |
 |------|------------|-------------|
-| `--config` | `run`, `instance quit`, `instance kill`, `instance show-ui`, `instance hide-ui` | Resolve the config or target instance from a Vortex config file |
+| `--config` | `run`, `instance quit`, `instance kill`, `instance show`, `instance hide` | Resolve the config or target instance from a Vortex config file |
 | `--cwd` | `run` | Working directory for all jobs. Defaults to the directory containing the `.vortex` file |
 | `--force` | `init`, `docs` | Overwrite an existing generated file |
 | `--port` | `run` | Override the deterministic HTTP port for the instance |
@@ -273,18 +273,18 @@ go run -tags embed_ui ./cmd/vortex run --headless --config mock/dev.vortex
 To surface the native webview later for that running instance:
 
 ```sh
-go run ./cmd/vortex instance show-ui dev
+go run ./cmd/vortex instance show dev
 ```
 
-To dismiss the native webview later without stopping the running instance:
+To close the native webview later without stopping the running instance:
 
 ```sh
-go run ./cmd/vortex instance hide-ui dev
+go run ./cmd/vortex instance hide dev
 ```
 
-`show-ui` is intended for non-`--dev` instances. If an instance was started with `--dev`, there is no native webview to surface later.
+`show` is intended for non-`--dev` instances. If an instance was started with `--dev`, there is no native webview to surface later.
 
-`hide-ui` is non-destructive: it hides the native window but leaves the Vortex instance and its managed jobs running.
+`hide` is non-destructive: it closes the native window and removes the app from the Dock/taskbar, while leaving the Vortex instance and its managed jobs running.
 
 Use `--headless` for normal no-window operation. Keep `--dev` for the development workflow where the Vite dev server proxies to Vortex and you work in the browser.
 

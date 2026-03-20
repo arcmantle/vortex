@@ -278,7 +278,7 @@ func instanceShowUICommand() *cobra.Command {
 	var configPath string
 
 	cmd := &cobra.Command{
-		Use:   "show-ui [name]",
+		Use:   "show [name]",
 		Short: "Show the native UI for a running Vortex instance",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -286,7 +286,7 @@ func instanceShowUICommand() *cobra.Command {
 			if len(args) == 1 {
 				name = args[0]
 			}
-			identity, err := resolveCommandIdentity(name, configPath, "usage: vortex instance show-ui <name>")
+			identity, err := resolveCommandIdentity(name, configPath, "usage: vortex instance show <name>")
 			if err != nil {
 				return err
 			}
@@ -302,7 +302,7 @@ func instanceHideUICommand() *cobra.Command {
 	var configPath string
 
 	cmd := &cobra.Command{
-		Use:   "hide-ui [name]",
+		Use:   "hide [name]",
 		Short: "Hide the native UI for a running Vortex instance",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -310,7 +310,7 @@ func instanceHideUICommand() *cobra.Command {
 			if len(args) == 1 {
 				name = args[0]
 			}
-			identity, err := resolveCommandIdentity(name, configPath, "usage: vortex instance hide-ui <name>")
+			identity, err := resolveCommandIdentity(name, configPath, "usage: vortex instance hide <name>")
 			if err != nil {
 				return err
 			}

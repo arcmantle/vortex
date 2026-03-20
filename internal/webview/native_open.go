@@ -6,10 +6,13 @@ import (
 	"context"
 	"log"
 
+	"arcmantle/windowfocus"
+
 	webviewlib "github.com/webview/webview_go"
 )
 
 func openWithContext(ctx context.Context, title, url string, width, height int, onReady func(Controller)) {
+	windowfocus.ShowApp()
 	w := webviewlib.New(false)
 	if w == nil {
 		return

@@ -24,6 +24,10 @@ import "C"
 
 import "unsafe"
 
+func showApp() {}
+
+func hideApp() {}
+
 func focus(window unsafe.Pointer) {
 	if window == nil {
 		return
