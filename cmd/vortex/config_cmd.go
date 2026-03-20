@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 
 	"arcmantle/vortex/internal/settings"
@@ -168,11 +170,14 @@ func normalizeConfigKey(key string) string {
 }
 
 func printConfigValues(cfg settings.Settings) error {
+	if err := settings.EnsureDir(); err != nil {
+		return err
+	}
 	path, err := settings.Path()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("path=%s\n", terminalClickablePath(path))
+	fmt.Printf("dir=%s\n", filepath.Dir(path))
 	fmt.Printf("%s=%s\n", configKeyBrowser, cfg.Browser)
 	fmt.Printf("%s=%s\n", configKeyEditor, cfg.Editor)
 	return nil
@@ -183,5 +188,13 @@ func terminalClickablePath(path string) string {
 	if trimmed == "" {
 		return ""
 	}
-	return fmt.Sprintf("%q", trimmed)
+	absolute := trimmed
+	if !filepath.IsAbs(absolute) {
+		resolved, err := filepath.Abs(absolute)
+		if err == nil {
+			absolute = resolved
+		}
+	}
+	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String()
+	return fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", uri, absolute)
 }

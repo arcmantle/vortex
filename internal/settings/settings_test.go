@@ -48,3 +48,22 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 		t.Fatalf("Load().Browser = %q, want %q", got.Browser, "firefox")
 	}
 }
+
+func TestEnsureDirCreatesSettingsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	userConfigDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { userConfigDir = os.UserConfigDir })
+
+	if err := EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir() error = %v", err)
+	}
+
+	path := filepath.Join(dir, "vortex")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("settings directory stat error = %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("EnsureDir() created non-directory at %q", path)
+	}
+}

@@ -32,7 +32,7 @@ func runInitCommand(path string, force bool) error {
 		return fmt.Errorf("write config template: %w", err)
 	}
 
-	fmt.Printf("Created Vortex config template: %s\n", resolvedPath)
+	fmt.Printf("Created Vortex config template:\n%s\n", terminalClickablePath(resolvedPath))
 	return nil
 }
 

@@ -1,16 +1,67 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"arcmantle/vortex/internal/settings"
 )
 
 func TestTerminalClickablePath(t *testing.T) {
-	got := terminalClickablePath("/Users/roen/Library/Application Support/vortex/config.json")
-	want := "\"/Users/roen/Library/Application Support/vortex/config.json\""
+	path := filepath.Join(string(filepath.Separator), "Users", "roen", "Library", "Application Support", "vortex", "config.json")
+	got := terminalClickablePath(path)
+	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	want := fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", uri, path)
 	if got != want {
 		t.Fatalf("terminalClickablePath() = %q, want %q", got, want)
+	}
+}
+
+func TestPrintConfigValuesUsesSingleDirLine(t *testing.T) {
+	dir := t.TempDir()
+	settings.SetUserConfigDir(func() (string, error) { return dir, nil })
+	t.Cleanup(func() { settings.SetUserConfigDir(os.UserConfigDir) })
+
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer readEnd.Close()
+
+	stdout := os.Stdout
+	os.Stdout = writeEnd
+	t.Cleanup(func() { os.Stdout = stdout })
+
+	if err := printConfigValues(settings.Settings{Browser: "firefox", Editor: "code"}); err != nil {
+		t.Fatalf("printConfigValues() error = %v", err)
+	}
+	if err := writeEnd.Close(); err != nil {
+		t.Fatalf("writeEnd.Close() error = %v", err)
+	}
+
+	output, err := io.ReadAll(readEnd)
+	if err != nil {
+		t.Fatalf("io.ReadAll() error = %v", err)
+	}
+
+	path, err := settings.Path()
+	if err != nil {
+		t.Fatalf("settings.Path() error = %v", err)
+	}
+	wantPrefix := fmt.Sprintf("dir=%s\n", filepath.Dir(path))
+	if !strings.HasPrefix(string(output), wantPrefix) {
+		t.Fatalf("printConfigValues() output = %q, want prefix %q", string(output), wantPrefix)
+	}
+	if strings.Contains(string(output), "dir:\n") {
+		t.Fatalf("printConfigValues() output = %q, want single-line dir output", string(output))
+	}
+	if strings.Contains(string(output), "\x1b]8;;") {
+		t.Fatalf("printConfigValues() output = %q, want plain dir path without hyperlink escape codes", string(output))
 	}
 }
 

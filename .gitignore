@@ -9,3 +9,4 @@ cmd/vortex-ui/web/package.json.md5
 cmd/vortex-ui/web/wailsjs/*.exe
 *.exe
 *.syso
+.tmp

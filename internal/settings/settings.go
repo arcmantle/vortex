@@ -52,8 +52,8 @@ func Save(cfg Settings) error {
 	}
 
 	cfg.normalize()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create settings directory: %w", err)
+	if err := ensureDir(path); err != nil {
+		return err
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -72,6 +72,14 @@ func Path() (string, error) {
 	return filePath()
 }
 
+func EnsureDir() error {
+	path, err := filePath()
+	if err != nil {
+		return err
+	}
+	return ensureDir(path)
+}
+
 func filePath() (string, error) {
 	dir, err := userConfigDir()
 	if err != nil {
@@ -81,6 +89,13 @@ func filePath() (string, error) {
 		return "", fmt.Errorf("resolve user config directory: empty path")
 	}
 	return filepath.Join(dir, "vortex", "config.json"), nil
+}
+
+func ensureDir(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create settings directory: %w", err)
+	}
+	return nil
 }
 
 func (cfg *Settings) normalize() {
