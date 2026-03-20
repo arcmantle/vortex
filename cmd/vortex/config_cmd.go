@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 
 	"arcmantle/vortex/internal/settings"
@@ -172,8 +174,16 @@ func printConfigValues(cfg settings.Settings) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("path=%s\n", path)
+	fmt.Printf("path=%s\n", terminalClickablePath(path))
 	fmt.Printf("%s=%s\n", configKeyBrowser, cfg.Browser)
 	fmt.Printf("%s=%s\n", configKeyEditor, cfg.Editor)
 	return nil
+}
+
+func terminalClickablePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(trimmed)}).String()
 }

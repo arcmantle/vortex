@@ -35,6 +35,7 @@ type FileLinkMatch = {
 };
 
 const FILE_PATH_PATTERN = /(?:^|[\s("'])((?:~\/|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])?(?:[^\s"'`()\[\]{}<>:]+[\\/])+[^\s"'`()\[\]{}<>:]+(?:\:\d+(?::\d+)?)?)/g;
+const ASSIGNED_FILE_PATH_PATTERN = /(?:^|\s)[A-Za-z_][\w-]*=(?:"((?:~\/|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])[^"\r\n]+)"|'((?:~\/|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])[^'\r\n]+)'|((?:~\/|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])[^\r\n]+?))(?=$|\s+[A-Za-z_][\w-]*=)/g;
 
 // ---------------------------------------------------------------------------
 // vortex-terminal — xterm.js pane connected to one process via SSE
@@ -268,6 +269,25 @@ async function revealTerminalPath(path: string): Promise<void> {
 
 function findFilePathMatches(line: string): FileLinkMatch[] {
 	const matches: FileLinkMatch[] = [];
+	const assignedRegex = new RegExp(ASSIGNED_FILE_PATH_PATTERN);
+	for (;;) {
+		const result = assignedRegex.exec(line);
+		if (!result || result.index < 0) {
+			break;
+		}
+		const text = (result[1] ?? result[2] ?? result[3] ?? '').trimEnd();
+		if (!text || text.includes('://')) {
+			continue;
+		}
+		const startIndex = result.index + result[0].lastIndexOf(text);
+		pushFilePathMatch(matches, {
+			text,
+			path: text,
+			startIndex,
+			endIndex: startIndex + text.length,
+		});
+	}
+
 	const regex = new RegExp(FILE_PATH_PATTERN);
 	for (;;) {
 		const result = regex.exec(line);
@@ -279,12 +299,29 @@ function findFilePathMatches(line: string): FileLinkMatch[] {
 			continue;
 		}
 		const startIndex = result.index + result[0].lastIndexOf(text);
-		matches.push({
+		pushFilePathMatch(matches, {
 			text,
 			path: text,
 			startIndex,
 			endIndex: startIndex + text.length,
 		});
 	}
+
+	matches.sort((left, right) => left.startIndex - right.startIndex);
 	return matches;
+}
+
+function pushFilePathMatch(matches: FileLinkMatch[], candidate: FileLinkMatch): void {
+	for (let index = 0; index < matches.length; index++) {
+		const existing = matches[index];
+		if (candidate.startIndex < existing.endIndex && candidate.endIndex > existing.startIndex) {
+			const candidateLength = candidate.endIndex - candidate.startIndex;
+			const existingLength = existing.endIndex - existing.startIndex;
+			if (candidateLength > existingLength) {
+				matches[index] = candidate;
+			}
+			return;
+		}
+	}
+	matches.push(candidate);
 }

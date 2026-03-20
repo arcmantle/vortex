@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	windowsDetachedProcess      = 0x00000008
-	windowsCreateNewProcGroup   = 0x00000200
+	windowsDetachedProcess        = 0x00000008
+	windowsCreateNewProcGroup     = 0x00000200
 	windowsCreateBreakawayFromJob = 0x01000000
 )
 
