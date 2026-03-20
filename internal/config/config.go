@@ -1,6 +1,6 @@
-// Package config handles loading and validating vortex YAML configuration files.
+// Package config handles loading and validating Vortex configuration files.
 //
-// Example vortex.yaml:
+// Example dev.vortex:
 //
 //	jobs:
 //	  - id: build
@@ -36,8 +36,12 @@ type JobSpec struct {
 	ID string `yaml:"id"`
 	// Label is the human-readable display name shown in the UI.
 	Label string `yaml:"label"`
+	// Shell optionally selects an interpreter for command script blocks.
+	// Examples: "bash", "zsh", "pwsh", "cmd", "python", "node".
+	Shell string `yaml:"shell"`
 	// Command is the full shell command including args, space-separated.
-	// Example: "go test -race ./..."
+	// When Shell is unset this is split into argv directly.
+	// When Shell is set this is passed as a script string to that interpreter.
 	Command string `yaml:"command"`
 	// Group optionally places this job under a named group in the UI.
 	Group string `yaml:"group"`
@@ -60,13 +64,69 @@ func (j JobSpec) ShouldRestart() bool {
 	return j.Restart == nil || *j.Restart
 }
 
-// Config is the top-level structure of a vortex.yaml file.
+// DisplayCommand returns the human-readable command shown in the UI.
+func (j JobSpec) DisplayCommand() string {
+	if strings.TrimSpace(j.Shell) == "" {
+		return j.Command
+	}
+	return strings.TrimSpace(j.Shell) + ": " + j.Command
+}
+
+// CommandLine resolves the executable and argv used to launch the job.
+func (j JobSpec) CommandLine() (string, []string, error) {
+	script := strings.TrimSpace(j.Command)
+	if script == "" {
+		return "", nil, fmt.Errorf("command is required")
+	}
+
+	shell := normalizeShellName(j.Shell)
+	if shell == "" {
+		parts := strings.Fields(script)
+		if len(parts) == 0 {
+			return "", nil, fmt.Errorf("command is required")
+		}
+		return parts[0], parts[1:], nil
+	}
+
+	switch shell {
+	case "bash":
+		return "bash", []string{"-lc", script}, nil
+	case "sh":
+		return "sh", []string{"-c", script}, nil
+	case "zsh":
+		return "zsh", []string{"-lc", script}, nil
+	case "fish":
+		return "fish", []string{"-c", script}, nil
+	case "cmd":
+		return "cmd", []string{"/C", script}, nil
+	case "powershell":
+		return "powershell", []string{"-Command", script}, nil
+	case "pwsh":
+		return "pwsh", []string{"-Command", script}, nil
+	case "python", "python3":
+		return shell, []string{"-c", script}, nil
+	case "node":
+		return "node", []string{"-e", script}, nil
+	case "deno":
+		return "deno", []string{"eval", script}, nil
+	case "bun":
+		return "bun", []string{"-e", script}, nil
+	default:
+		return "", nil, fmt.Errorf("unsupported shell %q; supported shells: bash, sh, zsh, fish, cmd, powershell, pwsh, python, python3, node, deno, bun", j.Shell)
+	}
+}
+
+func normalizeShellName(shell string) string {
+	return strings.ToLower(strings.TrimSpace(shell))
+}
+
+// Config is the top-level structure of a Vortex config file.
 type Config struct {
 	Name string    `yaml:"name"`
 	Jobs []JobSpec `yaml:"jobs"`
 }
 
-// Load reads and parses a YAML config file.
+// Load reads and parses a Vortex config file stored in YAML syntax.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -93,6 +153,9 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("duplicate job id %q", j.ID)
 		}
 		seen[j.ID] = struct{}{}
+		if _, _, err := j.CommandLine(); err != nil {
+			return nil, fmt.Errorf("job %q: %w", j.ID, err)
+		}
 		// Validate labels fall back to ID if not set.
 		if j.Label == "" {
 			j.Label = j.ID

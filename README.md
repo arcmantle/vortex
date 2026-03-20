@@ -12,7 +12,7 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 - **Live terminal output** — each job streams stdout/stderr into its own xterm.js terminal panel via SSE
 - **Native webview** — opens as a standalone desktop window (Edge WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux)
 - **Job groups** — organize related jobs under collapsible groups in the UI
-- **Named instances** — every YAML config declares a required `name`, and Vortex routes restart / quit commands to that specific running instance
+- **Named instances** — every Vortex config declares a required `name`, and Vortex routes restart / quit commands to that specific running instance
 - **Persistent jobs** — mark long-running jobs with `restart: false` to keep them alive across config reloads
 - **Embedded UI** — production builds embed the frontend into the Go binary (zero external files)
 
@@ -20,8 +20,10 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 
 ### Config file
 
+Vortex config files use the `.vortex` extension and YAML syntax.
+
 ```yaml
-# vortex.yaml
+# dev.vortex
 name: dev
 
 jobs:
@@ -38,14 +40,35 @@ jobs:
 
   - id: deploy
     label: Deploy
-    command: ./deploy.sh
+    shell: bash
+    command: ./deploy.sh --verify
     needs: [test]
     if: success
+
+  - id: smoke-node
+    label: Node Smoke
+    shell: node
+    command: |
+      console.log('smoke test starting')
+      console.log(process.version)
 ```
 
 ```sh
-vortex run vortex.yaml
+vortex run dev.vortex
 ```
+
+To create a new template config with a schema comment pinned to the version of `vortex` you are running:
+
+```sh
+vortex init
+vortex init my-app
+vortex init configs/dev.vortex
+```
+
+`vortex init` writes a `.vortex` file, adds a top-of-file `yaml-language-server` schema comment, and uses the running Vortex version to choose the schema URL:
+
+- `dev` builds point at `master`
+- release builds point at the matching `v<version>` tag
 
 Run `vortex help` to see the CLI commands and examples directly in the terminal, or `vortex docs` to open this README as embedded app documentation.
 
@@ -64,17 +87,58 @@ Each job supports:
 |-----------|------------|-------------------------------------------------------------------------|
 | `id`      | `string`   | **Required.** Unique identifier, used in `needs` references.            |
 | `label`   | `string`   | Display name in the UI. Defaults to `id`.                               |
-| `command` | `string`   | **Required.** Shell command to execute (space-separated with args).     |
+| `shell`   | `string`   | Optional interpreter for script blocks. Supports `bash`, `sh`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `python`, `python3`, `node`, `deno`, and `bun`. |
+| `command` | `string`   | **Required.** Direct command line when `shell` is omitted, or script text when `shell` is set. |
 | `group`   | `string`   | Optional group name — jobs in the same group are visually grouped.      |
 | `needs`   | `string[]` | IDs of jobs that must complete before this one starts.                  |
 | `if`      | `string`   | When to run: `success` (default), `failure`, or `always`.               |
 | `restart` | `bool`     | Whether to kill and re-launch on restart. Defaults to `true`.           |
 
+### VS Code Schema
+
+This repository includes a JSON schema at `schemas/vortex.schema.json` and wires it up in `.vscode/settings.json` for:
+
+- `dev.vortex`
+- `mock/*.vortex`
+- `*.vortex`
+
+If you want the same behavior in your own workspace or user settings, add:
+
+```json
+{
+  "files.associations": {
+    "*.vortex": "yaml"
+  },
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/arcmantle/vortex/master/schemas/vortex.schema.json": [
+      "*.vortex"
+    ]
+  }
+}
+```
+
+If you want a stable contract instead of following the latest `master` schema, pin the URL to a release tag:
+
+```json
+{
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/arcmantle/vortex/v1.0.10/schemas/vortex.schema.json": [
+      "*.vortex"
+    ]
+  }
+}
+```
+
+Using `master` is convenient for active development. Using a tag is safer for teams that want reproducible validation behavior over time.
+
+For SchemaStore submission, the schema itself also needs a stable public URL and a catalog entry with file matches. This repository now includes a ready-to-submit example catalog record at `schemas/vortex.schemastore-entry.json`.
+
 ## CLI
 
 ```
 vortex help
-vortex run [--dev] [--headless] [--port <n>] [--config <path>] [config.yaml]
+vortex init [path] [--force]
+vortex run [--dev] [--headless] [--port <n>] [--config <path>] [config-file]
 vortex docs [--force] [--no-open]
 vortex --help
 vortex -h
@@ -94,7 +158,8 @@ Important command-specific flags:
 
 | Flag | Applies To | Description |
 |------|------------|-------------|
-| `--config` | `run`, `instance quit`, `instance kill`, `instance show-ui`, `instance hide-ui` | Resolve the config or target instance from a YAML file |
+| `--config` | `run`, `instance quit`, `instance kill`, `instance show-ui`, `instance hide-ui` | Resolve the config or target instance from a Vortex config file |
+| `--force` | `init`, `docs` | Overwrite an existing generated file |
 | `--port` | `run` | Override the deterministic HTTP port for the instance |
 | `--headless` | `run` | Run normally without opening the native webview |
 | `--dev` | `run` | Development mode: skip the native webview and use the browser/Vite workflow |
@@ -104,6 +169,9 @@ Important command-specific flags:
 | `--no-open` | `docs` | Generate docs without opening a browser |
 
 `name` is mandatory. Unnamed configs fail validation.
+
+When `shell` is omitted, Vortex executes `command` directly by splitting it into argv.
+When `shell` is set, Vortex passes `command` as a script block to that interpreter.
 
 By default, Vortex derives both the handoff port and the HTTP/UI port from the config name, so different named configs can run at the same time without manual port management.
 
@@ -141,7 +209,7 @@ go run ./cmd/vortex docs --no-open
 To start a config without opening the native window immediately:
 
 ```sh
-go run -tags embed_ui ./cmd/vortex run --headless --config mock/dev.yaml
+go run -tags embed_ui ./cmd/vortex run --headless --config mock/dev.vortex
 ```
 
 To surface the native webview later for that running instance:
@@ -184,13 +252,13 @@ It also includes:
 - `generation`: the orchestrator restart generation for the running instance
 - `reachable`: in `--json` output, whether the instance API was reachable when queried
 
-To restart an already-running instance, rerun any YAML config that declares the same `name`:
+To restart an already-running instance, rerun any Vortex config that declares the same `name`:
 
 ```sh
-go run ./cmd/vortex run --config mock/dev.yaml
+go run ./cmd/vortex run --config mock/dev.vortex
 ```
 
-Inline `label:command` mode is no longer supported. Use a YAML config with a top-level `name` instead.
+Inline `label:command` mode is no longer supported. Use a Vortex config with a top-level `name` instead.
 
 To upgrade to the latest GitHub release and install it into a managed location:
 
@@ -241,7 +309,7 @@ go run -tags embed_ui ./cmd/vortex run --headless
 
 ```sh
 # Start the Go server + Vite dev server
-go run ./cmd/vortex --dev --config mock/dev.yaml &
+go run ./cmd/vortex --dev --config mock/dev.vortex &
 cd cmd/vortex-ui/web && pnpm install && pnpm dev
 ```
 
@@ -255,7 +323,7 @@ pnpm install
 pnpm build
 
 cd ../../..
-go run -tags embed_ui ./cmd/vortex --config mock/dev.yaml
+go run -tags embed_ui ./cmd/vortex --config mock/dev.vortex
 ```
 
 ### Production binary
@@ -291,7 +359,7 @@ The `embed_ui` build tag embeds the compiled frontend into the binary. Without i
 cmd/vortex/          CLI entry point, UI embedding
 cmd/vortex-ui/web/   Lit + TypeScript frontend (xterm.js terminals)
 internal/
-  config/            YAML config loading and validation
+  config/            Vortex config loading and validation
   instance/          Named-instance lock, deterministic port derivation, handoff registry
   orchestrator/      Dependency-aware job graph execution
   terminal/          Process lifecycle, output buffering, ring buffer

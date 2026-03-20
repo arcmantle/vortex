@@ -181,10 +181,9 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 		return
 	}
 
-	// Parse command.
-	parts := strings.Fields(job.Spec.Command)
-	if len(parts) == 0 {
-		log.Printf("[orchestrator] job %q has empty command", job.Spec.ID)
+	command, args, err := job.Spec.CommandLine()
+	if err != nil {
+		log.Printf("[orchestrator] failed to resolve job %q command: %v", job.Spec.ID, err)
 		job.setStatus(StatusFailure)
 		close(job.started)
 		close(job.done)
@@ -193,7 +192,7 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 
 	// Start the process in a terminal.
 	job.setStatus(StatusRunning)
-	term, err := o.termMgr.Start(ctx, job.Spec.ID, job.Spec.Label, parts[0], parts[1:])
+	term, err := o.termMgr.Start(ctx, job.Spec.ID, job.Spec.Label, command, args)
 	if err != nil {
 		log.Printf("[orchestrator] failed to start job %q: %v", job.Spec.ID, err)
 		job.setStatus(StatusFailure)

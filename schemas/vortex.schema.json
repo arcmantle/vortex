@@ -1,0 +1,147 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/arcmantle/vortex/master/schemas/vortex.schema.json",
+	"title": "Vortex Config",
+	"description": "Configuration file for the Vortex process orchestrator.",
+	"type": "object",
+	"additionalProperties": false,
+	"required": [
+		"name",
+		"jobs"
+	],
+	"properties": {
+		"name": {
+			"type": "string",
+			"minLength": 1,
+			"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+			"description": "Instance name used to target this running Vortex configuration."
+		},
+		"jobs": {
+			"type": "array",
+			"minItems": 1,
+			"items": {
+				"$ref": "#/definitions/job"
+			}
+		}
+	},
+	"defaultSnippets": [
+		{
+			"label": "Basic Vortex config",
+			"body": {
+				"name": "$1",
+				"jobs": [
+					{
+						"id": "$2",
+						"command": "$3"
+					}
+				]
+			}
+		},
+		{
+			"label": "Shell-backed job",
+			"body": {
+				"name": "$1",
+				"jobs": [
+					{
+						"id": "$2",
+						"shell": "node",
+						"command": "console.log('hello from vortex')"
+					}
+				]
+			}
+		}
+	],
+	"definitions": {
+		"job": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"id",
+				"command"
+			],
+			"properties": {
+				"id": {
+					"type": "string",
+					"minLength": 1,
+					"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+					"description": "Unique job identifier used in needs references."
+				},
+				"label": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Human-readable job label shown in the UI."
+				},
+				"shell": {
+					"type": "string",
+					"enum": [
+						"bash",
+						"sh",
+						"zsh",
+						"fish",
+						"cmd",
+						"powershell",
+						"pwsh",
+						"python",
+						"python3",
+						"node",
+						"deno",
+						"bun"
+					],
+					"description": "Optional interpreter used for command script blocks."
+				},
+				"command": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Command line when shell is omitted, or script text when shell is set."
+				},
+				"group": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Optional group name used to visually group jobs in the UI."
+				},
+				"needs": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"minLength": 1
+					},
+					"uniqueItems": true,
+					"default": []
+				},
+				"if": {
+					"type": "string",
+					"enum": [
+						"success",
+						"failure",
+						"always"
+					],
+					"description": "Dependency condition that controls when the job runs."
+				},
+				"restart": {
+					"type": "boolean",
+					"description": "Whether the job should be restarted when the config is reloaded."
+				}
+			}
+		}
+	},
+	"examples": [
+		{
+			"name": "dev",
+			"jobs": [
+				{
+					"id": "build",
+					"command": "go build ./...",
+					"group": "ci"
+				},
+				{
+					"id": "smoke-node",
+					"shell": "node",
+					"command": "console.log('vortex schema ready')",
+					"needs": [
+						"build"
+					]
+				}
+			]
+		}
+	]
+}

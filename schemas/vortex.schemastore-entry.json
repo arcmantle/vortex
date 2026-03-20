@@ -1,0 +1,8 @@
+{
+	"name": "Vortex Config",
+	"description": "Configuration file for the Vortex process orchestrator.",
+	"fileMatch": [
+		"*.vortex"
+	],
+	"url": "https://raw.githubusercontent.com/arcmantle/vortex/master/schemas/vortex.schema.json"
+}

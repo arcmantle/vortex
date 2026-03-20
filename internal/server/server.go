@@ -112,7 +112,7 @@ func jobToInfo(j *orchestrator.Job) terminalInfo {
 	return terminalInfo{
 		ID:      j.Spec.ID,
 		Label:   j.Spec.Label,
-		Command: j.Spec.Command,
+		Command: j.Spec.DisplayCommand(),
 		Group:   j.Spec.Group,
 		Needs:   needs,
 		Status:  string(j.Status()),

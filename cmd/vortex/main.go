@@ -1,9 +1,9 @@
 // Vortex — start processes and stream their output to a webview UI.
 //
-// Usage (YAML config):
+// Usage (Vortex config):
 //
-//	vortex run [--headless] [--port <n>] config.yaml
-//	vortex run --dev [--port <n>] config.yaml
+//	vortex run [--headless] [--port <n>] config.vortex
+//	vortex run --dev [--port <n>] config.vortex
 //
 // Usage (instances):
 //
@@ -25,7 +25,7 @@
 //	vortex -v
 //	vortex upgrade
 //
-// The YAML config file defines jobs with optional groups and dependency
+// The Vortex config file defines jobs with optional groups and dependency
 // conditions. See internal/config/config.go for the full schema.
 package main
 
@@ -491,14 +491,13 @@ type cliOptions struct {
 func loadConfigFile(configPath string, args []string) (*config.Config, string, error) {
 	if configPath == "" {
 		if len(args) == 0 {
-			return nil, "", fmt.Errorf("missing config file; vortex now requires a named YAML config")
+			return nil, "", fmt.Errorf("missing config file; vortex now requires a named config")
 		}
 		if len(args) > 1 {
 			return nil, "", fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
 		}
-		ext := strings.ToLower(filepath.Ext(args[0]))
-		if ext != ".yaml" && ext != ".yml" {
-			return nil, "", fmt.Errorf("inline mode is no longer supported; provide a YAML config with a top-level name")
+		if !isSupportedConfigPath(args[0]) {
+			return nil, "", fmt.Errorf("inline mode is no longer supported; provide a Vortex config with a top-level name")
 		}
 		configPath = args[0]
 	}
@@ -514,6 +513,11 @@ func loadConfigFile(configPath string, args []string) (*config.Config, string, e
 		return nil, "", err
 	}
 	return cfg, absPath, nil
+}
+
+func isSupportedConfigPath(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, ".vortex")
 }
 
 type instanceListResponse struct {

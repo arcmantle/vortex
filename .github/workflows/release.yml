@@ -94,7 +94,7 @@ jobs:
       - name: Smoke test embedded UI
         shell: bash
         run: |
-          ./${{ matrix.binary }} run --headless --port 7370 --config mock/release-smoke.yaml > smoke.log 2>&1 &
+          ./${{ matrix.binary }} run --headless --port 7370 --config mock/release-smoke.vortex > smoke.log 2>&1 &
           app_pid=$!
           success=0
 

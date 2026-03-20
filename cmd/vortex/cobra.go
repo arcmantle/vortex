@@ -36,6 +36,7 @@ func rootCommand() *cobra.Command {
 
 	cmd.AddCommand(runCommand())
 	cmd.AddCommand(instanceCommand())
+	cmd.AddCommand(initCommand())
 	cmd.AddCommand(versionCommand())
 	cmd.AddCommand(docsCommand())
 	cmd.AddCommand(upgradeCommand())
@@ -47,7 +48,7 @@ func runCommand() *cobra.Command {
 	var opts cliOptions
 
 	cmd := &cobra.Command{
-		Use:   "run [config.yaml]",
+		Use:   "run [config-file]",
 		Short: "Run a named Vortex config",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -58,7 +59,7 @@ func runCommand() *cobra.Command {
 
 	cmd.Flags().BoolVar(&opts.dev, "dev", false, "Development mode for browser/Vite workflow")
 	cmd.Flags().BoolVar(&opts.headless, "headless", false, "Run without opening the native webview")
-	cmd.Flags().StringVar(&opts.configFile, "config", "", "Path to YAML config file")
+	cmd.Flags().StringVar(&opts.configFile, "config", "", "Path to a Vortex config file")
 	cmd.Flags().IntVar(&opts.port, "port", 0, "Override the deterministic HTTP port for this instance")
 	cmd.Flags().BoolVar(&opts.forked, "forked", false, "internal")
 	_ = cmd.Flags().MarkHidden("forked")
@@ -133,6 +134,26 @@ func versionCommand() *cobra.Command {
 			printVersion()
 		},
 	}
+}
+
+func initCommand() *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "init [path]",
+		Short: "Create a new Vortex config template",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := ""
+			if len(args) == 1 {
+				path = args[0]
+			}
+			return runInitCommand(path, force)
+		},
+	}
+
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing config file")
+	return cmd
 }
 
 func docsCommand() *cobra.Command {
@@ -223,7 +244,7 @@ func instanceQuitCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a YAML config file")
+	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a Vortex config file")
 	return cmd
 }
 
@@ -247,7 +268,7 @@ func instanceKillCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a YAML config file")
+	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a Vortex config file")
 	return cmd
 }
 
@@ -271,7 +292,7 @@ func instanceShowUICommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a YAML config file")
+	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a Vortex config file")
 	return cmd
 }
 
@@ -295,7 +316,7 @@ func instanceHideUICommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a YAML config file")
+	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a Vortex config file")
 	return cmd
 }
 
@@ -329,6 +350,6 @@ func instanceRerunCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a YAML config file")
+	cmd.Flags().StringVar(&configPath, "config", "", "Resolve the target instance from a Vortex config file")
 	return cmd
 }

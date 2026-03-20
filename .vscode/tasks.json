@@ -4,7 +4,7 @@
 		{
 			"label": "vortex: go server (dev)",
 			"type": "shell",
-			"command": "go run ./cmd/vortex --dev --port 7370 --config mock/dev.yaml",
+			"command": "go run ./cmd/vortex --dev --port 7370 --config mock/dev.vortex",
 			"options": {
 				"cwd": "${workspaceFolder}"
 			},
