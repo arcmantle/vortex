@@ -8,7 +8,7 @@ import (
 
 func TestTerminalClickablePath(t *testing.T) {
 	got := terminalClickablePath("/Users/roen/Library/Application Support/vortex/config.json")
-	want := "file:///Users/roen/Library/Application%20Support/vortex/config.json"
+	want := "\"/Users/roen/Library/Application Support/vortex/config.json\""
 	if got != want {
 		t.Fatalf("terminalClickablePath() = %q, want %q", got, want)
 	}

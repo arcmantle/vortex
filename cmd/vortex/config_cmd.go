@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/url"
-	"path/filepath"
 	"strings"
 
 	"arcmantle/vortex/internal/settings"
@@ -185,5 +183,5 @@ func terminalClickablePath(path string) string {
 	if trimmed == "" {
 		return ""
 	}
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(trimmed)}).String()
+	return fmt.Sprintf("%q", trimmed)
 }
