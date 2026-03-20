@@ -59,6 +59,7 @@ func runCommand() *cobra.Command {
 
 	cmd.Flags().BoolVar(&opts.dev, "dev", false, "Development mode for browser/Vite workflow")
 	cmd.Flags().BoolVar(&opts.headless, "headless", false, "Run without opening the native webview")
+	cmd.Flags().StringVar(&opts.cwd, "cwd", "", "Working directory for all jobs (defaults to the config file directory)")
 	cmd.Flags().StringVar(&opts.configFile, "config", "", "Path to a Vortex config file")
 	cmd.Flags().IntVar(&opts.port, "port", 0, "Override the deterministic HTTP port for this instance")
 	cmd.Flags().BoolVar(&opts.forked, "forked", false, "internal")

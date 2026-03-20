@@ -90,6 +90,9 @@ func buildRunRawArgs(opts cliOptions) []string {
 	if opts.portSet {
 		rawArgs = append(rawArgs, "--port", strconv.Itoa(opts.port))
 	}
+	if strings.TrimSpace(opts.cwd) != "" {
+		rawArgs = append(rawArgs, "--cwd", opts.cwd)
+	}
 	if opts.configFile != "" {
 		rawArgs = append(rawArgs, "--config", opts.configFile)
 	}
@@ -103,6 +106,9 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	}
 	cfg, configPath, err := loadConfigFile(opts.configFile, opts.positionals)
 	if err != nil {
+		return fmt.Errorf("config error: %w", err)
+	}
+	if cfg.WorkingDir, err = resolveWorkingDir(configPath, opts.cwd); err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
 
@@ -284,9 +290,18 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 		}
 
 		log.Printf("Received restart handoff for %q with args: %v", identity.DisplayName, payload.Args)
-		handoffCfg, _, err := loadConfigFile(payload.ConfigFile, nil)
+		handoffCfg, handoffConfigPath, err := loadConfigFile(payload.ConfigFile, nil)
 		if err != nil {
 			log.Printf("handoff config error: %v", err)
+			return
+		}
+		handoffCwd, err := cwdFromRunArgs(payload.Args)
+		if err != nil {
+			log.Printf("handoff cwd error: %v", err)
+			return
+		}
+		if handoffCfg.WorkingDir, err = resolveWorkingDir(handoffConfigPath, handoffCwd); err != nil {
+			log.Printf("handoff cwd error: %v", err)
 			return
 		}
 		handoffIdentity, err := instance.NewIdentity(handoffCfg.Name)
@@ -484,6 +499,7 @@ type cliOptions struct {
 	forked      bool
 	port        int
 	portSet     bool
+	cwd         string
 	configFile  string
 	positionals []string
 }
@@ -504,7 +520,11 @@ func loadConfigFile(configPath string, args []string) (*config.Config, string, e
 	if len(args) > 0 && configPath != args[0] {
 		return nil, "", fmt.Errorf("unexpected positional args: %s", strings.Join(args, " "))
 	}
-	absPath, err := filepath.Abs(configPath)
+	resolvedConfigPath, err := resolveConfigPath(configPath)
+	if err != nil {
+		return nil, "", err
+	}
+	absPath, err := filepath.Abs(resolvedConfigPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve config path: %w", err)
 	}
@@ -517,7 +537,55 @@ func loadConfigFile(configPath string, args []string) (*config.Config, string, e
 
 func isSupportedConfigPath(path string) bool {
 	lower := strings.ToLower(path)
-	return strings.HasSuffix(lower, ".vortex")
+	ext := filepath.Ext(lower)
+	return ext == "" || ext == ".vortex"
+}
+
+func resolveConfigPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("config path must not be empty")
+	}
+
+	lower := strings.ToLower(trimmed)
+	ext := filepath.Ext(lower)
+	if ext == "" {
+		return trimmed + ".vortex", nil
+	}
+	if ext != ".vortex" {
+		return "", fmt.Errorf("config path must end in .vortex")
+	}
+	return trimmed, nil
+}
+
+func resolveWorkingDir(configPath, override string) (string, error) {
+	if strings.TrimSpace(override) != "" {
+		abs, err := filepath.Abs(override)
+		if err != nil {
+			return "", fmt.Errorf("resolve cwd: %w", err)
+		}
+		return abs, nil
+	}
+	return filepath.Dir(configPath), nil
+}
+
+func cwdFromRunArgs(args []string) (string, error) {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			break
+		}
+		if arg == "--cwd" {
+			if index+1 >= len(args) {
+				return "", fmt.Errorf("--cwd requires a value")
+			}
+			return args[index+1], nil
+		}
+		if strings.HasPrefix(arg, "--cwd=") {
+			return strings.TrimPrefix(arg, "--cwd="), nil
+		}
+	}
+	return "", nil
 }
 
 type instanceListResponse struct {

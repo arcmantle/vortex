@@ -131,7 +131,7 @@ type Terminal struct {
 
 // New creates and starts a Terminal with a child process. The process runs
 // until its command exits or ctx is cancelled.
-func New(ctx context.Context, id, label, command string, args []string) (*Terminal, error) {
+func New(ctx context.Context, id, label, command string, args []string, dir string) (*Terminal, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	t := &Terminal{
 		ID:      id,
@@ -143,6 +143,7 @@ func New(ctx context.Context, id, label, command string, args []string) (*Termin
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = dir
 	started, err := startChildProcess(cmd)
 	if err != nil {
 		return nil, err
@@ -403,8 +404,8 @@ func NewManager() *Manager {
 // Start launches a new process in a terminal and registers it. If a terminal
 // with the same ID already exists, the new one inherits the old output buffer
 // so the UI preserves history.
-func (m *Manager) Start(ctx context.Context, id, label, command string, args []string) (*Terminal, error) {
-	t, err := New(ctx, id, label, command, args)
+func (m *Manager) Start(ctx context.Context, id, label, command string, args []string, dir string) (*Terminal, error) {
+	t, err := New(ctx, id, label, command, args, dir)
 	if err != nil {
 		return nil, err
 	}

@@ -88,6 +88,7 @@ type Orchestrator struct {
 	jobs    map[string]*Job
 	order   []string // declaration order from config
 	termMgr *terminal.Manager
+	workDir string
 	gen     int // incremented on each Restart
 
 	// restarted is closed whenever Restart replaces the job graph, signaling
@@ -101,6 +102,7 @@ func New(cfg *config.Config) (*Orchestrator, error) {
 	o := &Orchestrator{
 		jobs:      make(map[string]*Job),
 		termMgr:   terminal.NewManager(),
+		workDir:   cfg.WorkingDir,
 		restarted: make(chan struct{}),
 	}
 	for _, spec := range cfg.Jobs {
@@ -192,7 +194,7 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 
 	// Start the process in a terminal.
 	job.setStatus(StatusRunning)
-	term, err := o.termMgr.Start(ctx, job.Spec.ID, job.Spec.Label, command, args)
+	term, err := o.termMgr.Start(ctx, job.Spec.ID, job.Spec.Label, command, args, o.workDir)
 	if err != nil {
 		log.Printf("[orchestrator] failed to start job %q: %v", job.Spec.ID, err)
 		job.setStatus(StatusFailure)
@@ -332,6 +334,7 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.mu.Lock()
 	newJobs := make(map[string]*Job, len(cfg.Jobs))
 	newOrder := make([]string, 0, len(cfg.Jobs))
+	o.workDir = cfg.WorkingDir
 	for _, spec := range cfg.Jobs {
 		label := spec.Label
 		if label == "" {

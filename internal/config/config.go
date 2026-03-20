@@ -124,6 +124,9 @@ func normalizeShellName(shell string) string {
 type Config struct {
 	Name string    `yaml:"name"`
 	Jobs []JobSpec `yaml:"jobs"`
+	// WorkingDir is the runtime working directory used for job execution.
+	// It is derived from CLI flags and the config path, not from YAML.
+	WorkingDir string `yaml:"-"`
 }
 
 // Load reads and parses a Vortex config file stored in YAML syntax.

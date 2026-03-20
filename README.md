@@ -55,6 +55,7 @@ jobs:
 
 ```sh
 vortex run dev.vortex
+vortex run dev
 ```
 
 To create a new template config with a schema comment pinned to the version of `vortex` you are running:
@@ -138,7 +139,7 @@ For SchemaStore submission, the schema itself also needs a stable public URL and
 ```
 vortex help
 vortex init [path] [--force]
-vortex run [--dev] [--headless] [--port <n>] [--config <path>] [config-file]
+vortex run [--dev] [--headless] [--port <n>] [--cwd <path>] [--config <path>] [config-file]
 vortex docs [--force] [--no-open]
 vortex --help
 vortex -h
@@ -159,19 +160,22 @@ Important command-specific flags:
 | Flag | Applies To | Description |
 |------|------------|-------------|
 | `--config` | `run`, `instance quit`, `instance kill`, `instance show-ui`, `instance hide-ui` | Resolve the config or target instance from a Vortex config file |
+| `--cwd` | `run` | Working directory for all jobs. Defaults to the directory containing the `.vortex` file |
 | `--force` | `init`, `docs` | Overwrite an existing generated file |
 | `--port` | `run` | Override the deterministic HTTP port for the instance |
 | `--headless` | `run` | Run normally without opening the native webview |
 | `--dev` | `run` | Development mode: skip the native webview and use the browser/Vite workflow |
 | `--json` | `instance list` | Emit machine-readable JSON |
 | `--prune` | `instance list` | Remove stale instance entries while listing |
-| `--force` | `docs` | Regenerate rendered docs even if a file already exists |
 | `--no-open` | `docs` | Generate docs without opening a browser |
 
 `name` is mandatory. Unnamed configs fail validation.
 
 When `shell` is omitted, Vortex executes `command` directly by splitting it into argv.
 When `shell` is set, Vortex passes `command` as a script block to that interpreter.
+
+By default, Vortex runs every job with the working directory set to the directory containing the `.vortex` file.
+Use `--cwd` to override that for the whole run.
 
 By default, Vortex derives both the handoff port and the HTTP/UI port from the config name, so different named configs can run at the same time without manual port management.
 
