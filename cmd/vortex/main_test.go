@@ -120,3 +120,30 @@ func TestShouldDetachFromTerminal(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldAttachConsoleForCLI(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "root help", args: nil, want: true},
+		{name: "global help flag", args: []string{"--help"}, want: true},
+		{name: "run help flag", args: []string{"run", "--help"}, want: true},
+		{name: "version flag", args: []string{"--version"}, want: true},
+		{name: "version command", args: []string{"version"}, want: true},
+		{name: "config command", args: []string{"config", "list"}, want: true},
+		{name: "instance command", args: []string{"instance", "list"}, want: true},
+		{name: "docs command", args: []string{"docs"}, want: true},
+		{name: "run command", args: []string{"run", "dev.vortex"}, want: false},
+		{name: "run command with flags", args: []string{"run", "--dev", "dev.vortex"}, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldAttachConsoleForCLI(tc.args); got != tc.want {
+				t.Fatalf("shouldAttachConsoleForCLI(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}

@@ -441,7 +441,7 @@ pnpm build
 go build -tags embed_ui -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
 ```
 
-On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. If you launch a console build instead, Vortex now re-spawns itself detached as a fallback. On macOS/Linux, you can either use `build.go` or omit that flag with plain `go build`:
+On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. Vortex now reattaches to the parent console for console-oriented commands such as `help`, `version`, `config`, `instance`, `docs`, and invalid-command errors, so CLI output still works from a terminal while normal `run` launches remain detached. On macOS/Linux, you can either use `build.go` or omit that flag with plain `go build`:
 
 ```sh
 go build -tags embed_ui -o vortex ./cmd/vortex

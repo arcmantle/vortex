@@ -177,11 +177,20 @@ export class VortexApp extends LitElement {
   @state() private _closedIds = new Set<string>();
   @state() private _instanceName = 'Vortex';
   private _gen = -1;
+  private _reportedReady = false;
 
   connectedCallback(): void {
     super.connectedCallback();
     this._fetchTerminals();
     setInterval(() => this._fetchTerminals(), 3000);
+  }
+
+  protected firstUpdated(): void {
+    if (this._reportedReady) return;
+    this._reportedReady = true;
+    requestAnimationFrame(() => {
+      (window as typeof window & { vortexAppReady?: () => void }).vortexAppReady?.();
+    });
   }
 
   private async _fetchTerminals(): Promise<void> {

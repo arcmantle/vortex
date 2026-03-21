@@ -41,6 +41,7 @@ func resolveInitConfigPath(path string) (string, error) {
 	if path == "" {
 		path = defaultInitConfigPath
 	}
+	path = filepath.Clean(path)
 
 	lower := strings.ToLower(path)
 	ext := filepath.Ext(lower)

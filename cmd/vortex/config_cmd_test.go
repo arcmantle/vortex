@@ -13,10 +13,15 @@ import (
 )
 
 func TestTerminalClickablePath(t *testing.T) {
-	path := filepath.Join(string(filepath.Separator), "Users", "roen", "Library", "Application Support", "vortex", "config.json")
+	path := filepath.Join("Users", "roen", "Library", "Application Support", "vortex", "config.json")
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+
 	got := terminalClickablePath(path)
-	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
-	want := fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", uri, path)
+	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String()
+	want := fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", uri, absolute)
 	if got != want {
 		t.Fatalf("terminalClickablePath() = %q, want %q", got, want)
 	}

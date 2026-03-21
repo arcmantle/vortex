@@ -62,6 +62,7 @@ var (
 )
 
 func main() {
+	prepareConsoleForCLI(os.Args[1:])
 	root := rootCommand()
 	if err := validateCommandPath(root, os.Args[1:]); err != nil {
 		log.Fatal(err)
@@ -161,6 +162,10 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	showUIRequests := make(chan struct{}, 1)
+	var uiThread *uiThreadRunner
+	if runtime.GOOS != "darwin" {
+		uiThread = newUIThreadRunner()
+	}
 	var uiMu sync.Mutex
 	uiOpen := false
 	uiSuppressStop := false
@@ -242,11 +247,15 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 				stop()
 			}
 		}
+		// WebView backends expect Run to execute on a stable GUI thread.
+		// macOS requires the actual main thread, while Windows and Linux use a
+		// dedicated locked UI thread so webview setup never runs on an arbitrary
+		// goroutine.
 		if runtime.GOOS == "darwin" {
 			open()
 			return true
 		}
-		go open()
+		uiThread.Post(open)
 		return true
 	}
 
