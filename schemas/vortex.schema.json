@@ -16,6 +16,9 @@
 			"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
 			"description": "Instance name used to target this running Vortex configuration."
 		},
+		"node": {
+			"$ref": "#/definitions/nodeRuntime"
+		},
 		"jobs": {
 			"type": "array",
 			"minItems": 1,
@@ -68,9 +71,43 @@
 					}
 				]
 			}
+		},
+		{
+			"label": "Node shared runtime",
+			"body": {
+				"name": "$1",
+				"node": {
+					"imports": [
+						{
+							"from": "node:path",
+							"names": [
+								"basename"
+							]
+						}
+					],
+					"vars": {
+						"apiBase": "http://localhost:3000"
+					},
+					"functions": {
+						"logBanner": "export function logBanner(text) {\n  console.log(text)\n}"
+					}
+				},
+				"jobs": [
+					{
+						"id": "$2",
+						"shell": "node",
+						"use": "node",
+						"command": "logBanner(apiBase)\nconsole.log(basename('/tmp/demo.txt'))"
+					}
+				]
+			}
 		}
 	],
 	"definitions": {
+		"jsIdentifier": {
+			"type": "string",
+			"pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+		},
 		"shellName": {
 			"type": "string",
 			"enum": [
@@ -117,6 +154,144 @@
 				"minLength": 1
 			}
 		},
+		"nodeNamedImportAlias": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"export"
+			],
+			"properties": {
+				"export": {
+					"type": "string",
+					"minLength": 1
+				},
+				"as": {
+					"$ref": "#/definitions/jsIdentifier"
+				}
+			}
+		},
+		"nodeImportDefault": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"from",
+				"default"
+			],
+			"properties": {
+				"from": {
+					"type": "string",
+					"minLength": 1
+				},
+				"default": {
+					"$ref": "#/definitions/jsIdentifier"
+				}
+			}
+		},
+		"nodeImportNamespace": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"from",
+				"namespace"
+			],
+			"properties": {
+				"from": {
+					"type": "string",
+					"minLength": 1
+				},
+				"namespace": {
+					"$ref": "#/definitions/jsIdentifier"
+				}
+			}
+		},
+		"nodeImportNames": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"from",
+				"names"
+			],
+			"properties": {
+				"from": {
+					"type": "string",
+					"minLength": 1
+				},
+				"names": {
+					"type": "array",
+					"minItems": 1,
+					"uniqueItems": true,
+					"items": {
+						"$ref": "#/definitions/jsIdentifier"
+					}
+				}
+			}
+		},
+		"nodeImportNamed": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"from",
+				"named"
+			],
+			"properties": {
+				"from": {
+					"type": "string",
+					"minLength": 1
+				},
+				"named": {
+					"type": "array",
+					"minItems": 1,
+					"items": {
+						"$ref": "#/definitions/nodeNamedImportAlias"
+					}
+				}
+			}
+		},
+		"nodeImport": {
+			"oneOf": [
+				{
+					"$ref": "#/definitions/nodeImportDefault"
+				},
+				{
+					"$ref": "#/definitions/nodeImportNamespace"
+				},
+				{
+					"$ref": "#/definitions/nodeImportNames"
+				},
+				{
+					"$ref": "#/definitions/nodeImportNamed"
+				}
+			]
+		},
+		"nodeRuntime": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"imports": {
+					"type": "array",
+					"items": {
+						"$ref": "#/definitions/nodeImport"
+					}
+				},
+				"vars": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/jsIdentifier"
+					},
+					"additionalProperties": true
+				},
+				"functions": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/jsIdentifier"
+					},
+					"additionalProperties": {
+						"type": "string",
+						"minLength": 1
+					}
+				}
+			}
+		},
 		"job": {
 			"type": "object",
 			"additionalProperties": false,
@@ -135,6 +310,13 @@
 					"type": "string",
 					"minLength": 1,
 					"description": "Human-readable job label shown in the UI."
+				},
+				"use": {
+					"type": "string",
+					"enum": [
+						"node"
+					],
+					"description": "Opt the job into the top-level shared runtime. V1 supports only `node` and requires `shell: node`."
 				},
 				"shell": {
 					"oneOf": [
@@ -192,6 +374,22 @@
 	"examples": [
 		{
 			"name": "dev",
+			"node": {
+				"imports": [
+					{
+						"from": "node:path",
+						"names": [
+							"basename"
+						]
+					}
+				],
+				"vars": {
+					"apiBase": "http://localhost:3000"
+				},
+				"functions": {
+					"logBanner": "export function logBanner(text) { console.log(text) }"
+				}
+			},
 			"jobs": [
 				{
 					"id": "build",
@@ -201,6 +399,7 @@
 				{
 					"id": "smoke-node",
 					"shell": "node",
+					"use": "node",
 					"command": "console.log('vortex schema ready')",
 					"needs": [
 						"build"

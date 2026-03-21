@@ -1,0 +1,44 @@
+name: node-runtime
+
+node:
+  imports:
+    - from: node:path
+      names: [basename]
+    - from: ./node-runtime-helpers.mjs
+      namespace: helpers
+  vars:
+    apiBase: http://localhost:3000
+    outputDir: dist
+  functions:
+    logBanner: |
+      export function logBanner(text) {
+        console.log(`== ${text} ==`)
+      }
+    makeOutputPath: |
+      export function makeOutputPath(name) {
+        return `${outputDir}/${helpers.slug(name)}`
+      }
+
+jobs:
+  - id: shared-node-build
+    label: Shared Node Build
+    shell: node
+    use: node
+    command: |
+      logBanner(apiBase)
+      console.log(makeOutputPath('Hello World'))
+      console.log(basename('/tmp/demo.txt'))
+      console.log(await helpers.describeFile('./package.json'))
+
+  - id: shared-node-watch
+    label: Shared Node Watch
+    shell: node
+    use: node
+    restart: false
+    needs: [shared-node-build]
+    command: |
+      logBanner('watcher alive')
+      console.log('This job uses restart: false, but it will still restart if the top-level node block changes.')
+      setInterval(() => {
+        console.log(`tick ${helpers.slug('Shared Watcher')}`)
+      }, 5000)

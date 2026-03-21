@@ -53,15 +53,19 @@ func TestPrintConfigValuesUsesSingleDirLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings.Path() error = %v", err)
 	}
-	wantPrefix := fmt.Sprintf("dir=%s\n", filepath.Dir(path))
+	dirURL := (&url.URL{Scheme: "file", Path: filepath.Dir(path)}).String()
+	wantPrefix := fmt.Sprintf("dir=%s\n", dirURL)
 	if !strings.HasPrefix(string(output), wantPrefix) {
 		t.Fatalf("printConfigValues() output = %q, want prefix %q", string(output), wantPrefix)
 	}
 	if strings.Contains(string(output), "dir:\n") {
 		t.Fatalf("printConfigValues() output = %q, want single-line dir output", string(output))
 	}
+	if strings.Contains(string(output), fmt.Sprintf("dir=%s\n", filepath.Dir(path))) {
+		t.Fatalf("printConfigValues() output = %q, want dir URL rather than raw path", string(output))
+	}
 	if strings.Contains(string(output), "\x1b]8;;") {
-		t.Fatalf("printConfigValues() output = %q, want plain dir path without hyperlink escape codes", string(output))
+		t.Fatalf("printConfigValues() output = %q, want plain dir URL without hyperlink escape codes", string(output))
 	}
 }
 

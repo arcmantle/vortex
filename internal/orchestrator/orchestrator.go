@@ -52,6 +52,19 @@ func newJob(spec config.JobSpec) *Job {
 	}
 }
 
+func shouldCarryPersistentJob(oldJob *Job, newSpec config.JobSpec, nodeRuntimeChanged bool) bool {
+	if oldJob == nil {
+		return false
+	}
+	if oldJob.Spec.ShouldRestart() || newSpec.ShouldRestart() {
+		return false
+	}
+	if nodeRuntimeChanged && newSpec.UsesNodeRuntime() {
+		return false
+	}
+	return true
+}
+
 // Status returns the current lifecycle state.
 func (j *Job) Status() Status {
 	j.mu.Lock()
@@ -85,6 +98,7 @@ func (j *Job) setStatus(s Status) {
 // Orchestrator manages all jobs and their lifecycle.
 type Orchestrator struct {
 	mu      sync.RWMutex
+	cfg     *config.Config
 	jobs    map[string]*Job
 	order   []string // declaration order from config
 	termMgr *terminal.Manager
@@ -100,6 +114,7 @@ type Orchestrator struct {
 // is called.
 func New(cfg *config.Config) (*Orchestrator, error) {
 	o := &Orchestrator{
+		cfg:       cfg,
 		jobs:      make(map[string]*Job),
 		termMgr:   terminal.NewManager(),
 		workDir:   cfg.WorkingDir,
@@ -183,7 +198,7 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 		return
 	}
 
-	command, args, err := job.Spec.CommandLine()
+	command, args, err := o.cfg.PrepareJobCommand(job.Spec)
 	if err != nil {
 		log.Printf("[orchestrator] failed to resolve job %q command: %v", job.Spec.ID, err)
 		job.setStatus(StatusFailure)
@@ -309,6 +324,10 @@ func (o *Orchestrator) AddAndStart(ctx context.Context, id, label, command strin
 func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.mu.Lock()
 	keepIDs := make(map[string]struct{}, len(cfg.Jobs))
+	nodeRuntimeChanged := false
+	if o.cfg != nil {
+		nodeRuntimeChanged = !o.cfg.Node.Equal(cfg.Node)
+	}
 	for _, spec := range cfg.Jobs {
 		keepIDs[spec.ID] = struct{}{}
 	}
@@ -317,10 +336,14 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	//    Persistent jobs (restart: false) keep running.
 	var toWait []<-chan struct{}
 	persistent := make(map[string]*Job) // old jobs to carry forward
+	nextSpecs := make(map[string]config.JobSpec, len(cfg.Jobs))
+	for _, spec := range cfg.Jobs {
+		nextSpecs[spec.ID] = spec
+	}
 	for _, id := range o.order {
 		job := o.jobs[id]
-		_, stillPresent := keepIDs[id]
-		if !job.Spec.ShouldRestart() && stillPresent {
+		nextSpec, stillPresent := nextSpecs[id]
+		if stillPresent && shouldCarryPersistentJob(job, nextSpec, nodeRuntimeChanged) {
 			persistent[id] = job
 			continue
 		}
@@ -360,6 +383,7 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.jobs = newJobs
 	o.order = newOrder
 	o.termMgr.Prune(keepIDs)
+	o.cfg = cfg
 
 	// Signal SSE handlers to re-fetch their jobs.
 	close(o.restarted)

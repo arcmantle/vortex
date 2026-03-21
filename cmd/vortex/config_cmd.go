@@ -177,7 +177,8 @@ func printConfigValues(cfg settings.Settings) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("dir=%s\n", filepath.Dir(path))
+	dir := filepath.Dir(path)
+	fmt.Printf("dir=%s\n", (&url.URL{Scheme: "file", Path: dir}).String())
 	fmt.Printf("%s=%s\n", configKeyBrowser, cfg.Browser)
 	fmt.Printf("%s=%s\n", configKeyEditor, cfg.Editor)
 	return nil

@@ -44,6 +44,9 @@ type JobSpec struct {
 	ID string `yaml:"id"`
 	// Label is the human-readable display name shown in the UI.
 	Label string `yaml:"label"`
+	// Use opts the job into a shared runtime declared at the top-level config.
+	// V1 supports only "node".
+	Use string `yaml:"use"`
 	// Shell optionally selects an interpreter for command script blocks.
 	// Examples: "bash", "zsh", "pwsh", "cmd", "python", "node".
 	Shell string `yaml:"shell"`
@@ -69,6 +72,7 @@ type JobSpec struct {
 type rawJobSpec struct {
 	ID      string   `yaml:"id"`
 	Label   string   `yaml:"label"`
+	Use     string   `yaml:"use"`
 	Group   string   `yaml:"group"`
 	Needs   []string `yaml:"needs"`
 	If      string   `yaml:"if"`
@@ -95,6 +99,7 @@ func (j *JobSpec) UnmarshalYAML(node *yaml.Node) error {
 	*j = JobSpec{
 		ID:      raw.ID,
 		Label:   raw.Label,
+		Use:     raw.Use,
 		Shell:   shell,
 		Command: command,
 		Group:   raw.Group,
@@ -221,8 +226,9 @@ func resolveOSValue(node *yaml.Node, field string) (string, error) {
 
 // Config is the top-level structure of a Vortex config file.
 type Config struct {
-	Name string    `yaml:"name"`
-	Jobs []JobSpec `yaml:"jobs"`
+	Name string          `yaml:"name"`
+	Node NodeRuntimeSpec `yaml:"node"`
+	Jobs []JobSpec       `yaml:"jobs"`
 	// WorkingDir is the runtime working directory used for job execution.
 	// It is derived from CLI flags and the config path, not from YAML.
 	WorkingDir string `yaml:"-"`
@@ -244,6 +250,9 @@ func Load(path string) (*Config, error) {
 	if len(cfg.Jobs) == 0 {
 		return nil, fmt.Errorf("config defines no jobs")
 	}
+	if err := cfg.validateNodeRuntime(); err != nil {
+		return nil, err
+	}
 	// Validate: all IDs non-empty and unique.
 	seen := make(map[string]struct{}, len(cfg.Jobs))
 	for i := range cfg.Jobs {
@@ -255,6 +264,9 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("duplicate job id %q", j.ID)
 		}
 		seen[j.ID] = struct{}{}
+		if err := cfg.validateJobSpec(*j); err != nil {
+			return nil, fmt.Errorf("job %q: %w", j.ID, err)
+		}
 		if _, _, err := j.CommandLine(); err != nil {
 			return nil, fmt.Errorf("job %q: %w", j.ID, err)
 		}

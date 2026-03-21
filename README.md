@@ -81,6 +81,7 @@ Top-level config fields:
 | Field  | Type     | Description                                                                  |
 |--------|----------|------------------------------------------------------------------------------|
 | `name` | `string` | **Required.** Instance name used to target restarts and `vortex <name> --quit`. |
+| `node` | `object` | Optional shared Node runtime block. Declares imports, vars, and functions for opted-in Node jobs. |
 | `jobs` | `Job[]`  | **Required.** Jobs to run in this instance.                                  |
 
 Each job supports:
@@ -89,12 +90,56 @@ Each job supports:
 |-----------|------------|-------------------------------------------------------------------------|
 | `id`      | `string`   | **Required.** Unique identifier, used in `needs` references.            |
 | `label`   | `string`   | Display name in the UI. Defaults to `id`.                               |
+| `use`     | `string`   | Optional shared runtime selection. V1 supports only `node`, and only on `shell: node` jobs. |
 | `shell`   | `string \| object` | Optional interpreter for script blocks. Accepts either a plain shell string or an OS selector object with `darwin`, `linux`, `windows`, and `default` keys. |
 | `command` | `string \| object` | **Required.** Direct command line when `shell` is omitted, or script text when `shell` is set. Accepts either a plain string or an OS selector object with `darwin`, `linux`, `windows`, and `default` keys. |
 | `group`   | `string`   | Optional group name — jobs in the same group are visually grouped.      |
 | `needs`   | `string[]` | IDs of jobs that must complete before this one starts.                  |
 | `if`      | `string`   | When to run: `success` (default), `failure`, or `always`.               |
 | `restart` | `bool`     | Whether to kill and re-launch on restart. Defaults to `true`.           |
+
+### Shared Node Runtime
+
+Vortex can now expose a shared Node runtime to opted-in Node jobs. This is useful when you want a `.vortex` file to declare imports, variables, and lightweight helper functions that multiple jobs can use.
+
+```yaml
+name: dev
+
+node:
+  imports:
+    - from: node:path
+      names: [basename]
+    - from: ./scripts/helpers.mjs
+      namespace: helpers
+
+  vars:
+    apiBase: http://localhost:3000
+
+  functions:
+    logBanner: |
+      export function logBanner(text) {
+        console.log(`== ${text} ==`)
+      }
+
+jobs:
+  - id: smoke-node
+    shell: node
+    use: node
+    command: |
+      logBanner(apiBase)
+      console.log(basename('/tmp/demo.txt'))
+      console.log(helpers.slug('Hello World'))
+```
+
+Notes:
+
+- `use: node` is required for a job to see the top-level `node` runtime.
+- Only `shell: node` jobs can use `use: node`.
+- Shared-runtime Node jobs are executed through generated `.mjs` wrapper files instead of `node -e`, so ESM imports, `node:` built-ins, package imports, and local module imports work predictably.
+- If you reload a running Vortex instance with a changed top-level `node` block, opted-in `use: node` jobs are restarted so they pick up the new shared runtime, even if they were previously being carried forward with `restart: false`.
+- `node.imports` supports four forms: `default`, `namespace`, `names`, and `named` alias mappings.
+- `node.vars` values are exposed as exported JavaScript constants.
+- `node.functions` entries must export a function with the same name as their YAML key.
 
 ### VS Code Schema
 
