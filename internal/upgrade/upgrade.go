@@ -559,6 +559,7 @@ try {
 		scriptFile.Name(),
 	)
 	if err := cmd.Start(); err != nil {
+		_ = os.Remove(scriptFile.Name())
 		return fmt.Errorf("launch upgrade script: %w", err)
 	}
 

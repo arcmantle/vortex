@@ -140,15 +140,49 @@ func New(cfg *config.Config) (*Orchestrator, error) {
 	return o, nil
 }
 
+// jobLaunch bundles a job with its pre-resolved dependency pointers.
+// Dependencies are resolved under the orchestrator lock so that runJob never
+// touches o.jobs directly and is therefore safe against concurrent Restarts.
+type jobLaunch struct {
+	job  *Job
+	deps []*Job
+}
+
+// resolveLaunchesLocked builds a jobLaunch slice for the given job IDs.
+// Caller must hold at least o.mu.RLock.
+func (o *Orchestrator) resolveLaunchesLocked(ids []string) []jobLaunch {
+	launches := make([]jobLaunch, 0, len(ids))
+	for _, id := range ids {
+		job, ok := o.jobs[id]
+		if !ok {
+			continue
+		}
+		deps := make([]*Job, 0, len(job.Spec.Needs))
+		for _, needID := range job.Spec.Needs {
+			if dep, ok := o.jobs[needID]; ok {
+				deps = append(deps, dep)
+			}
+		}
+		launches = append(launches, jobLaunch{job: job, deps: deps})
+	}
+	return launches
+}
+
 // Start begins executing all jobs according to their dependency graph.
 // This is non-blocking; each job runs in its own goroutine.
 func (o *Orchestrator) Start(ctx context.Context) {
-	for _, id := range o.order {
-		go o.runJob(ctx, o.jobs[id])
+	o.mu.RLock()
+	launches := o.resolveLaunchesLocked(o.order)
+	o.mu.RUnlock()
+	for _, l := range launches {
+		go o.runJob(ctx, l.job, l.deps)
 	}
 }
 
-func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
+// runJob executes a single job after waiting for its pre-resolved deps.
+// deps must be resolved under the orchestrator lock before calling runJob
+// to avoid data races against concurrent Restart operations.
+func (o *Orchestrator) runJob(ctx context.Context, job *Job, deps []*Job) {
 	// Skip jobs that are already running (persistent jobs carried over from
 	// a previous generation).
 	if job.Status() == StatusRunning {
@@ -157,8 +191,7 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 
 	// Wait for all dependencies to reach a terminal state.
 	// Persistent running jobs (restart: false) are treated as satisfied.
-	for _, needID := range job.Spec.Needs {
-		dep := o.jobs[needID]
+	for _, dep := range deps {
 		if !dep.Spec.ShouldRestart() && dep.Status() == StatusRunning {
 			continue // persistent job still running — treat as satisfied
 		}
@@ -183,12 +216,12 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 	case "always":
 		shouldRun = true
 	case "success":
-		shouldRun = o.allSucceeded(job.Spec.Needs)
+		shouldRun = o.allSucceeded(deps)
 	case "failure":
-		shouldRun = o.anyFailed(job.Spec.Needs)
+		shouldRun = o.anyFailed(deps)
 	default:
 		log.Printf("[orchestrator] job %q: unknown condition %q, defaulting to success", job.Spec.ID, cond)
-		shouldRun = o.allSucceeded(job.Spec.Needs)
+		shouldRun = o.allSucceeded(deps)
 	}
 
 	if !shouldRun {
@@ -232,9 +265,8 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job) {
 	close(job.done)
 }
 
-func (o *Orchestrator) allSucceeded(needs []string) bool {
-	for _, id := range needs {
-		j := o.jobs[id]
+func (o *Orchestrator) allSucceeded(deps []*Job) bool {
+	for _, j := range deps {
 		// Persistent running jobs count as succeeded for dependency purposes.
 		if !j.Spec.ShouldRestart() && j.Status() == StatusRunning {
 			continue
@@ -246,9 +278,8 @@ func (o *Orchestrator) allSucceeded(needs []string) bool {
 	return true
 }
 
-func (o *Orchestrator) anyFailed(needs []string) bool {
-	for _, id := range needs {
-		j := o.jobs[id]
+func (o *Orchestrator) anyFailed(deps []*Job) bool {
+	for _, j := range deps {
 		if !j.Spec.ShouldRestart() && j.Status() == StatusRunning {
 			continue
 		}
@@ -315,7 +346,7 @@ func (o *Orchestrator) AddAndStart(ctx context.Context, id, label, command strin
 	o.order = append(o.order, id)
 	o.mu.Unlock()
 
-	go o.runJob(ctx, job)
+	go o.runJob(ctx, job, nil) // no declared dependencies for dynamically added jobs
 }
 
 // Restart kills all running processes, replaces the job graph with the new
@@ -409,12 +440,16 @@ func (o *Orchestrator) Rerun(ctx context.Context, id string) error {
 	affectedSet := o.collectDownstreamLocked(id)
 	affectedOrder := make([]string, 0, len(o.order))
 	toWait := make([]<-chan struct{}, 0, len(affectedSet))
+
+	// Save specs and collect channels to wait on while we still hold the lock.
+	savedSpecs := make(map[string]config.JobSpec, len(affectedSet))
 	for _, jobID := range o.order {
 		if _, ok := affectedSet[jobID]; !ok {
 			continue
 		}
 		affectedOrder = append(affectedOrder, jobID)
 		job := o.jobs[jobID]
+		savedSpecs[jobID] = job.Spec
 		if term := job.Terminal(); term != nil && job.Status() == StatusRunning {
 			term.Kill()
 			toWait = append(toWait, job.Done())
@@ -422,21 +457,40 @@ func (o *Orchestrator) Rerun(ctx context.Context, id string) error {
 	}
 	o.mu.RUnlock()
 
+	// Wait outside the lock for killed jobs to reach a terminal state.
 	for _, ch := range toWait {
 		<-ch
 	}
 
+	// Rebuild affected jobs and resolve their deps under the write lock so
+	// there is no window for a concurrent Restart to invalidate the map.
 	o.mu.Lock()
+	launches := make([]jobLaunch, 0, len(affectedOrder))
 	for _, jobID := range affectedOrder {
-		job := o.jobs[jobID]
-		o.jobs[jobID] = newJob(job.Spec)
+		spec, ok := savedSpecs[jobID]
+		if !ok {
+			continue
+		}
+		if _, exists := o.jobs[jobID]; !exists {
+			// Removed by a concurrent Restart — skip.
+			continue
+		}
+		j := newJob(spec)
+		o.jobs[jobID] = j
+		deps := make([]*Job, 0, len(spec.Needs))
+		for _, needID := range spec.Needs {
+			if dep, ok := o.jobs[needID]; ok {
+				deps = append(deps, dep)
+			}
+		}
+		launches = append(launches, jobLaunch{job: j, deps: deps})
 	}
 	close(o.restarted)
 	o.restarted = make(chan struct{})
 	o.mu.Unlock()
 
-	for _, jobID := range affectedOrder {
-		go o.runJob(ctx, o.jobs[jobID])
+	for _, l := range launches {
+		go o.runJob(ctx, l.job, l.deps)
 	}
 	return nil
 }

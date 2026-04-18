@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -27,33 +28,51 @@ type OutputChunk struct {
 }
 
 type outputBuffer struct {
-	chunks     []OutputChunk
+	chunks     []OutputChunk // ring buffer, capacity == maxBufferedChunks
+	head       int           // index of oldest item
+	count      int           // number of valid items
 	totalBytes int
 }
 
+func newOutputBuffer() outputBuffer {
+	return outputBuffer{chunks: make([]OutputChunk, maxBufferedChunks)}
+}
+
 func (b *outputBuffer) add(chunk OutputChunk) {
-	b.chunks = append(b.chunks, chunk)
 	b.totalBytes += len(chunk.Data)
-	for len(b.chunks) > maxBufferedChunks || b.totalBytes > maxBufferedBytes {
-		b.totalBytes -= len(b.chunks[0].Data)
-		copy(b.chunks, b.chunks[1:])
-		last := len(b.chunks) - 1
-		b.chunks[last] = OutputChunk{}
-		b.chunks = b.chunks[:last]
+	if b.count < maxBufferedChunks {
+		tail := (b.head + b.count) % maxBufferedChunks
+		b.chunks[tail] = chunk
+		b.count++
+	} else {
+		// Ring is full: overwrite the oldest slot in O(1).
+		b.totalBytes -= len(b.chunks[b.head].Data)
+		b.chunks[b.head] = chunk
+		b.head = (b.head + 1) % maxBufferedChunks
+	}
+	// Evict oldest entries to stay within the byte budget.
+	for b.count > 0 && b.totalBytes > maxBufferedBytes {
+		b.totalBytes -= len(b.chunks[b.head].Data)
+		b.chunks[b.head] = OutputChunk{}
+		b.head = (b.head + 1) % maxBufferedChunks
+		b.count--
 	}
 }
 
 func (b *outputBuffer) snapshot() []OutputChunk {
-	out := make([]OutputChunk, len(b.chunks))
-	copy(out, b.chunks)
+	out := make([]OutputChunk, b.count)
+	for i := 0; i < b.count; i++ {
+		out[i] = b.chunks[(b.head+i)%maxBufferedChunks]
+	}
 	return out
 }
 
 func (b *outputBuffer) clear() {
-	for i := range b.chunks {
-		b.chunks[i] = OutputChunk{}
+	for i := 0; i < b.count; i++ {
+		b.chunks[(b.head+i)%maxBufferedChunks] = OutputChunk{}
 	}
-	b.chunks = nil
+	b.head = 0
+	b.count = 0
 	b.totalBytes = 0
 }
 
@@ -134,12 +153,13 @@ type Terminal struct {
 func New(ctx context.Context, id, label, command string, args []string, dir string) (*Terminal, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	t := &Terminal{
-		ID:      id,
-		Label:   label,
-		Command: command,
-		Args:    args,
-		done:    make(chan struct{}),
-		cancel:  cancel,
+		ID:        id,
+		Label:     label,
+		Command:   command,
+		Args:      args,
+		done:      make(chan struct{}),
+		cancel:    cancel,
+		outputBuf: newOutputBuffer(),
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -207,6 +227,7 @@ func (t *Terminal) drain(r io.ReadCloser, proc processHandle) {
 		select {
 		case ch <- exitChunk:
 		default:
+			log.Printf("[terminal] %s: dropped exit chunk for slow subscriber", t.ID)
 		}
 	}
 	t.exited = true
@@ -232,6 +253,7 @@ func (t *Terminal) appendChunk(ts time.Time, data []byte) {
 		select {
 		case ch <- chunk:
 		default:
+			log.Printf("[terminal] %s: dropped output chunk for slow subscriber", t.ID)
 		}
 	}
 	t.mu.Unlock()
@@ -361,7 +383,7 @@ func (t *Terminal) ClearBuffer() {
 // Kill terminates the child process tree. It is safe to call multiple times.
 func (t *Terminal) Kill() {
 	if pid := t.PID(); pid > 0 {
-		killProcessTree(pid)
+		_ = killProcessTree(pid) // best effort; process may have already exited
 	}
 	if t.cancel != nil {
 		t.cancel()

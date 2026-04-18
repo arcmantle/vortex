@@ -3,7 +3,7 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -26,14 +26,14 @@ var (
 // maybeFork respawns the process detached from any attached console when
 // needed. Proper release builds use -H=windowsgui and skip this path because
 // they already run without a console.
-func maybeFork() bool {
+func maybeFork() (bool, error) {
 	if !hasAttachedConsole() {
-		return false
+		return false, nil
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		log.Fatalf("cannot find own executable: %v", err)
+		return false, fmt.Errorf("cannot find own executable: %w", err)
 	}
 
 	args := append(os.Args[1:], "--forked")
@@ -43,9 +43,9 @@ func maybeFork() bool {
 		HideWindow:    true,
 	}
 	if err := cmd.Start(); err != nil {
-		log.Fatalf("failed to detach: %v", err)
+		return false, fmt.Errorf("failed to detach: %w", err)
 	}
-	return true
+	return true, nil
 }
 
 func hasAttachedConsole() bool {

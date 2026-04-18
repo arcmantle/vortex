@@ -9,3 +9,5 @@ func newUIThreadRunner() *uiThreadRunner {
 }
 
 func (runner *uiThreadRunner) Post(fn func()) {}
+
+func (runner *uiThreadRunner) Close() {}

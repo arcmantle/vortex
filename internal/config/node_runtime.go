@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -38,15 +39,7 @@ func (n NodeRuntimeSpec) Empty() bool {
 }
 
 func (n NodeRuntimeSpec) Equal(other NodeRuntimeSpec) bool {
-	left, err := json.Marshal(n)
-	if err != nil {
-		return false
-	}
-	right, err := json.Marshal(other)
-	if err != nil {
-		return false
-	}
-	return string(left) == string(right)
+	return reflect.DeepEqual(n, other)
 }
 
 func (j JobSpec) UsesNodeRuntime() bool {
@@ -138,7 +131,10 @@ func (cfg Config) validateNodeRuntime() error {
 		if body == "" {
 			return fmt.Errorf("node.functions.%s must not be empty", key)
 		}
-		pattern := regexp.MustCompile(`(?m)export\s+(async\s+)?function\s+` + regexp.QuoteMeta(key) + `\b`)
+		pattern, compileErr := regexp.Compile(`(?m)export\s+(async\s+)?function\s+` + regexp.QuoteMeta(key) + `\b`)
+		if compileErr != nil {
+			return fmt.Errorf("internal: compile export pattern for %q: %w", key, compileErr)
+		}
 		if !pattern.MatchString(body) {
 			return fmt.Errorf("node.functions.%s must export function %q", key, key)
 		}
@@ -431,10 +427,18 @@ func isLocalModuleSpecifier(specifier string) bool {
 
 func fileURL(path string) string {
 	slashPath := filepath.ToSlash(path)
-	if volume := filepath.VolumeName(path); volume != "" {
-		slashPath = "/" + slashPath
+	volume := filepath.VolumeName(path)
+	if volume == "" {
+		// Unix absolute path: /foo/bar → file:///foo/bar
+		return (&url.URL{Scheme: "file", Path: slashPath}).String()
 	}
-	return (&url.URL{Scheme: "file", Path: slashPath}).String()
+	if len(volume) > 2 {
+		// UNC volume (\\server\share): filepath.ToSlash gives //server/share/...
+		// Correct file URL format: file://server/share/path
+		return "file:" + slashPath
+	}
+	// Drive-letter volume (C:): C:/foo/bar → file:///C:/foo/bar
+	return (&url.URL{Scheme: "file", Path: "/" + slashPath}).String()
 }
 
 func sanitizeFileComponent(value string) string {

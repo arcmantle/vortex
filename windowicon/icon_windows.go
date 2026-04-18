@@ -50,8 +50,12 @@ static void setWindowIconFromData(void *hwnd, const void *data, int len) {
 	if (GdipCreateBitmapFromStream(stream, &bitmap) == Ok && bitmap) {
 		HICON iconHandle = NULL;
 		if (GdipCreateHICONFromBitmap(bitmap, &iconHandle) == Ok && iconHandle) {
+			HICON oldBig = (HICON)SendMessageW(window, WM_GETICON, ICON_BIG, 0);
 			SendMessageW(window, WM_SETICON, ICON_BIG, (LPARAM)iconHandle);
 			SendMessageW(window, WM_SETICON, ICON_SMALL, (LPARAM)iconHandle);
+			if (oldBig && oldBig != iconHandle) {
+				DestroyIcon(oldBig);
+			}
 		}
 		GdipDisposeImage((GpImage *)bitmap);
 	}

@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +26,11 @@ const (
 	apiPortBase     = 30000
 	portSpan        = 10000
 )
+
+// registryMu serializes all registry read-modify-write operations within a
+// process, preventing lost updates when multiple goroutines call SetUIState,
+// Touch, MarkControlAction, or SetManagedPIDs concurrently.
+var registryMu sync.Mutex
 
 const (
 	handoffActionRestart = "restart"
@@ -166,6 +173,9 @@ func postHandoff(identity Identity, payload []byte) error {
 		return fmt.Errorf("could not reach existing instance %q: %w", identity.DisplayName, err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("port collision: port %d is in use by a different Vortex instance (name mismatch)", identity.HandoffPort)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("existing instance %q returned %s", identity.DisplayName, resp.Status)
 	}
@@ -177,6 +187,7 @@ func postHandoff(identity Identity, payload []byte) error {
 func ServeHandoff(l net.Listener, identity Identity, handler func(HandoffPayload)) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /handoff", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var payload HandoffPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -195,7 +206,11 @@ func ServeHandoff(l net.Listener, identity Identity, handler func(HandoffPayload
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	go http.Serve(l, mux) //nolint:errcheck
+	go func() {
+		if err := http.Serve(l, mux); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("[instance] handoff server stopped: %v", err)
+		}
+	}()
 }
 
 // Register records a running instance in the local registry and returns a cleanup function.
@@ -207,6 +222,9 @@ func Register(identity Identity, httpPort int, devMode, headless bool, uiState s
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create instance registry: %w", err)
 	}
+
+	// Clean up any leftover tmp files from previous crashed runs.
+	cleanupStaleTempFiles(dir, identity.Name)
 
 	meta := Metadata{
 		Name:        identity.Name,
@@ -232,7 +250,9 @@ func Register(identity Identity, httpPort int, devMode, headless bool, uiState s
 
 // SetUIState updates the live UI visibility state for a running instance.
 func SetUIState(identity Identity, state string) error {
-	meta, err := GetMetadata(identity.Name)
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	meta, err := GetMetadataLocked(identity.Name)
 	if err != nil {
 		return err
 	}
@@ -250,7 +270,9 @@ func SetUIState(identity Identity, state string) error {
 
 // Touch updates the instance metadata timestamp without changing any other fields.
 func Touch(identity Identity) error {
-	meta, err := GetMetadata(identity.Name)
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	meta, err := GetMetadataLocked(identity.Name)
 	if err != nil {
 		return err
 	}
@@ -268,7 +290,9 @@ func Touch(identity Identity) error {
 // MarkControlAction updates the instance metadata timestamp for explicit control actions
 // without changing the broader metadata-updated timestamp semantics.
 func MarkControlAction(identity Identity) error {
-	meta, err := GetMetadata(identity.Name)
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	meta, err := GetMetadataLocked(identity.Name)
 	if err != nil {
 		return err
 	}
@@ -285,7 +309,9 @@ func MarkControlAction(identity Identity) error {
 
 // SetManagedPIDs records the currently running child process IDs for an instance.
 func SetManagedPIDs(identity Identity, pids []int) error {
-	meta, err := GetMetadata(identity.Name)
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	meta, err := GetMetadataLocked(identity.Name)
 	if err != nil {
 		return err
 	}
@@ -334,6 +360,12 @@ func ListMetadata() ([]Metadata, error) {
 
 // GetMetadata returns registry metadata for a single named instance.
 func GetMetadata(name string) (Metadata, error) {
+	return GetMetadataLocked(name)
+}
+
+// GetMetadataLocked is the internal implementation of GetMetadata.
+// It does NOT acquire registryMu; callers that need serialization must hold it.
+func GetMetadataLocked(name string) (Metadata, error) {
 	identity, err := NewIdentity(name)
 	if err != nil {
 		return Metadata{}, err
@@ -440,6 +472,26 @@ func writeMetadataFile(dir string, meta Metadata) error {
 		return fmt.Errorf("publish instance metadata: %w", err)
 	}
 	return nil
+}
+
+// cleanupStaleTempFiles removes leftover *.tmp registry files that may have
+// been left behind when a previous process crashed between WriteFile and Rename.
+func cleanupStaleTempFiles(dir, name string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	// Temp files are written as "<name>.json.<pid>.tmp"
+	prefix := name + ".json."
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		n := entry.Name()
+		if strings.HasPrefix(n, prefix) && strings.HasSuffix(n, ".tmp") {
+			_ = os.Remove(filepath.Join(dir, n))
+		}
+	}
 }
 
 func isAddrInUse(err error) bool {

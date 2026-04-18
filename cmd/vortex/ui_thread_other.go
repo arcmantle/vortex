@@ -2,10 +2,14 @@
 
 package main
 
-import "runtime"
+import (
+	"runtime"
+	"sync"
+)
 
 type uiThreadRunner struct {
 	work chan func()
+	once sync.Once
 }
 
 func newUIThreadRunner() *uiThreadRunner {
@@ -27,4 +31,12 @@ func (runner *uiThreadRunner) Post(fn func()) {
 		return
 	}
 	runner.work <- fn
+}
+
+// Close shuts down the UI thread goroutine. Safe to call multiple times.
+func (runner *uiThreadRunner) Close() {
+	if runner == nil {
+		return
+	}
+	runner.once.Do(func() { close(runner.work) })
 }

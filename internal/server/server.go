@@ -193,7 +193,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Restrict CORS: in dev mode allow the Vite dev server; in production
+	// the UI is served from the same origin and no CORS header is needed.
+	if s.devMode && s.devServerProxy != "" {
+		w.Header().Set("Access-Control-Allow-Origin", s.devServerProxy)
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -397,7 +401,7 @@ func (s *Server) handleInputTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req terminalInputRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -427,7 +431,7 @@ func (s *Server) handleResizeTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req resizeTerminalRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -453,7 +457,7 @@ func (s *Server) handleClearBuffer(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {
 	var req openPathRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -472,7 +476,7 @@ func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	var payload instance.HandoffPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, r, &payload); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -505,11 +509,27 @@ func serveEmbedded(w http.ResponseWriter, r *http.Request, fsys fs.FS) {
 	http.ServeFileFS(w, r, fsys, path)
 }
 
+const maxRequestBodyBytes = 1 << 20 // 1 MiB
+
+// decodeJSON reads at most maxRequestBodyBytes from r.Body and JSON-decodes
+// it into v. Callers should return 400 if decodeJSON returns an error.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// writeJSON marshals v to JSON and writes it as the full response body.
+// Marshaling happens before any bytes are sent so that errors can still
+// produce a proper HTTP 500 instead of corrupting a partially-written response.
 func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	data, err := json.Marshal(v)
+	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+	_, _ = w.Write([]byte("\n"))
 }
 
 func resolveOpenPathTarget(workDir, rawPath string) (openPathTarget, error) {
@@ -582,10 +602,22 @@ func trimTrailingNumber(path string) (string, int) {
 	return prefix, value
 }
 
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func resolveRevealPath(workDir, rawPath string) (string, error) {
 	target, err := resolveOpenPathTarget(workDir, rawPath)
 	if err != nil {
-		return "", fmt.Errorf("path must not be empty")
+		return "", err
 	}
 	return target.Path, nil
 }
@@ -614,29 +646,21 @@ func stripLineColumnSuffix(path string) string {
 	return trimmed
 }
 
-func isDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 // ListenAndServe starts the HTTP server on addr and blocks until ctx is done.
 func ListenAndServe(ctx context.Context, addr string, h http.Handler) error {
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: h,
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      0, // SSE streams are long-lived; no per-response write deadline
+		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		srv.Shutdown(shutCtx) //nolint:errcheck
+		srv.Shutdown(shutCtx)
 	}()
 	err := srv.ListenAndServe()
 	if err == http.ErrServerClosed {

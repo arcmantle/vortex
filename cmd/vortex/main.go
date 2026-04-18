@@ -136,7 +136,12 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	// into a new session. On Windows, GUI-subsystem builds already start
 	// detached and console-attached launches respawn without the console.
 	if shouldDetachFromTerminal(opts) {
-		if maybeFork() {
+		forked, forkErr := maybeFork()
+		if forkErr != nil {
+			l.Close()
+			return fmt.Errorf("fork error: %w", forkErr)
+		}
+		if forked {
 			l.Close()
 			return nil
 		}
@@ -165,6 +170,7 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	var uiThread *uiThreadRunner
 	if runtime.GOOS != "darwin" {
 		uiThread = newUIThreadRunner()
+		defer uiThread.Close()
 	}
 	var uiMu sync.Mutex
 	uiOpen := false
@@ -422,7 +428,9 @@ func runQuitCommand(identity instance.Identity) error {
 			_ = l.Close()
 		}
 		if meta, metaErr := instance.GetMetadata(identity.Name); metaErr == nil {
-			_ = instance.CleanupInactiveMetadata(meta)
+			if cleanupErr := instance.CleanupInactiveMetadata(meta); cleanupErr != nil {
+				log.Printf("cleanup warning: %v", cleanupErr)
+			}
 		}
 		fmt.Printf("No active Vortex instance named %q.\n", identity.DisplayName)
 		return nil
@@ -483,7 +491,9 @@ func runRerunCommand(identity instance.Identity, jobID string) error {
 			_ = l.Close()
 		}
 		if meta, metaErr := instance.GetMetadata(identity.Name); metaErr == nil {
-			_ = instance.CleanupInactiveMetadata(meta)
+			if cleanupErr := instance.CleanupInactiveMetadata(meta); cleanupErr != nil {
+				log.Printf("cleanup warning: %v", cleanupErr)
+			}
 		}
 		fmt.Printf("No active Vortex instance named %q.\n", identity.DisplayName)
 		return nil
@@ -905,7 +915,7 @@ func killInstanceProcesses(identity instance.Identity) (killProcessesResponse, e
 	if err != nil {
 		return killProcessesResponse{}, err
 	}
-	client := &http.Client{}
+	client := &http.Client{Timeout: 10 * time.Second}
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/processes", meta.HTTPPort)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
@@ -927,7 +937,7 @@ func killInstanceProcesses(identity instance.Identity) (killProcessesResponse, e
 }
 
 func fetchInstanceTerminals(meta instance.Metadata) (instanceListResponse, error) {
-	client := &http.Client{}
+	client := &http.Client{Timeout: 10 * time.Second}
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/terminals", meta.HTTPPort)
 	resp, err := client.Get(url)
 	if err != nil {

@@ -289,7 +289,7 @@ function findFilePathMatches(line: string): FileLinkMatch[] {
 	}
 
 	const regex = new RegExp(FILE_PATH_PATTERN);
-	for (;;) {
+	while (true) {
 		const result = regex.exec(line);
 		if (!result || result.index < 0) {
 			break;
