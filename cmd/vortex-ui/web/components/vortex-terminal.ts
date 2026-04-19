@@ -155,6 +155,12 @@ export class VortexTerminal extends LitElement {
 		if (this.token) params.set('token', this.token);
 		const url = `${API_BASE}/events?${params.toString()}`;
 		this._sse = new EventSource(url);
+		this._sse.onopen = () => {
+			// Reset the terminal on (re)connection so that the full server-side
+			// replay does not duplicate already-displayed output.
+			this._term?.reset();
+			this._sseErrorShown = false;
+		};
 		this._sse.onmessage = (e) => {
 			try {
 				const chunk = JSON.parse(e.data) as LineDTO;
@@ -199,9 +205,12 @@ export class VortexTerminal extends LitElement {
 		this._term?.reset();
 		if (this.terminal) {
 			try {
-				await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/buffer`, { method: 'DELETE', headers: this._authHeaders() });
+				const res = await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/buffer`, { method: 'DELETE', headers: this._authHeaders() });
+				if (!res.ok) {
+					this._term?.write('\r\n\x1b[2m[clear buffer failed]\x1b[0m\r\n');
+				}
 			} catch {
-				// network error — ignored
+				this._term?.write('\r\n\x1b[2m[clear buffer failed]\x1b[0m\r\n');
 			}
 		}
 	}
@@ -209,6 +218,11 @@ export class VortexTerminal extends LitElement {
 	/** Close the SSE stream (for tab close). */
 	closeStream(): void {
 		this._disconnectSSE();
+	}
+
+	/** Write a dim status message into the terminal (e.g. for action failures). */
+	writeStatus(message: string): void {
+		this._term?.write(`\r\n\x1b[2m[${message}]\x1b[0m\r\n`);
 	}
 
 	private async _reportSize(): Promise<void> {

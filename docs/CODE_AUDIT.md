@@ -5,7 +5,7 @@
 
 ---
 
-## Fixed Issues (95)
+## Fixed Issues (100)
 
 ### Security
 
@@ -125,6 +125,11 @@
 | 110 | **CLI HTTP API calls unauthenticated on non-dev instances** — Fix #70 stripped tokens from `ListMetadata()`, but `killInstanceProcesses` and `fetchInstanceTerminals` used that token-stripped metadata. Changed `killInstanceProcesses` to use `GetMetadata`; `fetchInstanceTerminals` re-reads token when missing. | `instance_cmds.go` |
 | 111 | **`atomicWriteFile` deterministic temp name races** — Used fixed `path + ".tmp"` suffix. Concurrent goroutines writing the same target could race on the temp file. Changed to `os.CreateTemp` with random suffix. | `node_runtime.go` |
 | 112 | **Unhandled promise rejections in `_rerunTab`, `clearOutput`, `revealTerminalPath`** — Bare `await fetch(...)` called fire-and-forget via `void` produced `unhandledrejection` on network errors. Added `try/catch` consistent with other fetch callers. | `app.ts`, `vortex-terminal.ts` |
+| 97 | **`Rerun` + `Restart` race on `o.cfg` generation** — `runJob` read `o.cfg` without lock. Added `cfg` field to `jobLaunch`; `resolveLaunchesLocked` snapshots `o.cfg` under lock and threads it to `runJob`. All call sites (`Start`, `Rerun`, `AddAndStart`) updated. | `orchestrator.go` |
+| 108 | **`runJob` reads `o.cfg` without orchestrator lock** — Same fix as #97: `runJob` now receives `cfg` as a parameter instead of accessing `o.cfg`. | `orchestrator.go` |
+| 98 | **SSE reconnection replays all output (duplicates)** — Added `onopen` handler to `EventSource` that calls `this._term?.reset()` before any data arrives. On reconnect, the terminal is cleared before the server replays the buffer. | `vortex-terminal.ts` |
+| 103 | **`clearOutput()` ignores server response** — Now checks the DELETE response status. On failure, writes dim `[clear buffer failed]` message into the terminal. | `vortex-terminal.ts` |
+| 104 | **No user feedback on toolbar action failure** — Added `writeStatus()` method to `VortexTerminal`. `_stopTerminal` and `_rerunTab` now write `[stop failed]` / `[rerun failed]` on error. Extracted `_activeTerminalEl()` helper. | `app.ts`, `vortex-terminal.ts` |
 
 ---
 
@@ -161,15 +166,9 @@
 
 ---
 
-## Open Issues (5)
+## Open Issues (0)
 
-| # | Severity | Issue | Files | Notes |
-|---|----------|-------|-------|-------|
-| 97 | Low | `Rerun` + `Restart` race on `o.cfg` generation | `orchestrator.go` | Needs structural config-generation tracking. Deferred. |
-| 98 | Medium | SSE reconnection replays all output (duplicates) | `server.go`, `vortex-terminal.ts` | Needs `Last-Event-Id` or client-side reset. Deferred. |
-| 103 | Low | `clearOutput()` ignores server response | `vortex-terminal.ts` | Related to #98 reconnection story. Deferred. |
-| 104 | Low | No user feedback on toolbar action failure | `app.ts` | UX enhancement. Deferred. |
-| 108 | Low | `runJob` reads `o.cfg` without orchestrator lock | `orchestrator.go` | Same class as #97. Needs structural fix. Deferred. |
+All issues resolved.
 
 ---
 
@@ -177,9 +176,9 @@
 
 | Status | Count |
 |--------|-------|
-| Fixed | 95 |
+| Fixed | 100 |
 | Documented / Known | 4 |
 | False Positive / N/A | 3 |
 | Dismissed | 5 |
-| Open | 5 |
+| Open | 0 |
 | **Total** | **112** |

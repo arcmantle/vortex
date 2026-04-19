@@ -174,6 +174,7 @@ func New(cfg *config.Config) (*Orchestrator, error) {
 type jobLaunch struct {
 	job  *Job
 	deps []*Job
+	cfg  *config.Config
 }
 
 // resolveLaunchesLocked builds a jobLaunch slice for the given job IDs.
@@ -192,7 +193,7 @@ func (o *Orchestrator) resolveLaunchesLocked(ids []string) []jobLaunch {
 				deps = append(deps, dep)
 			}
 		}
-		launches = append(launches, jobLaunch{job: job, deps: deps})
+		launches = append(launches, jobLaunch{job: job, deps: deps, cfg: o.cfg})
 	}
 	return launches
 }
@@ -204,14 +205,14 @@ func (o *Orchestrator) Start(ctx context.Context) {
 	launches := o.resolveLaunchesLocked(o.order)
 	o.mu.RUnlock()
 	for _, l := range launches {
-		go o.runJob(ctx, l.job, l.deps)
+		go o.runJob(ctx, l.job, l.deps, l.cfg)
 	}
 }
 
 // runJob executes a single job after waiting for its pre-resolved deps.
 // deps must be resolved under the orchestrator lock before calling runJob
 // to avoid data races against concurrent Restart operations.
-func (o *Orchestrator) runJob(ctx context.Context, job *Job, deps []*Job) {
+func (o *Orchestrator) runJob(ctx context.Context, job *Job, deps []*Job, cfg *config.Config) {
 	// Skip jobs that are already running (persistent jobs carried over from
 	// a previous generation).
 	if job.Status() == StatusRunning {
@@ -276,7 +277,7 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job, deps []*Job) {
 		return
 	}
 
-	command, args, err := o.cfg.PrepareJobCommand(spec)
+	command, args, err := cfg.PrepareJobCommand(spec)
 	if err != nil {
 		log.Printf("[orchestrator] failed to resolve job %q command: %v", spec.ID, err)
 		job.setStatus(StatusFailure)
@@ -394,9 +395,10 @@ func (o *Orchestrator) AddAndStart(ctx context.Context, id, label, command strin
 	}
 	o.jobs[id] = job
 	o.order = append(o.order, id)
+	cfg := o.cfg
 	o.mu.Unlock()
 
-	go o.runJob(ctx, job, nil) // no declared dependencies for dynamically added jobs
+	go o.runJob(ctx, job, nil, cfg) // no declared dependencies for dynamically added jobs
 }
 
 // Restart kills all running processes, replaces the job graph with the new
@@ -535,7 +537,8 @@ func (o *Orchestrator) Rerun(ctx context.Context, id string) error {
 				deps = append(deps, dep)
 			}
 		}
-		launches = append(launches, jobLaunch{job: j, deps: deps})
+		launch := jobLaunch{job: j, deps: deps, cfg: o.cfg}
+		launches = append(launches, launch)
 	}
 	close(o.restarted)
 	o.restarted = make(chan struct{})
@@ -543,7 +546,7 @@ func (o *Orchestrator) Rerun(ctx context.Context, id string) error {
 	o.mu.Unlock()
 
 	for _, l := range launches {
-		go o.runJob(ctx, l.job, l.deps)
+		go o.runJob(ctx, l.job, l.deps, l.cfg)
 	}
 	return nil
 }

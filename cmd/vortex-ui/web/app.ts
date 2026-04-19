@@ -264,27 +264,36 @@ export class VortexApp extends LitElement {
   }
 
   private _stopTerminal(id: string): void {
-    void fetch(`${API_BASE}/api/terminals/${encodeURIComponent(id)}`, { method: 'DELETE', headers: this._authHeaders() }).catch(() => {});
+    void fetch(`${API_BASE}/api/terminals/${encodeURIComponent(id)}`, { method: 'DELETE', headers: this._authHeaders() })
+      .then((res) => { if (!res.ok) this._activeTerminalEl()?.writeStatus('stop failed'); })
+      .catch(() => { this._activeTerminalEl()?.writeStatus('stop failed'); });
   }
 
   private async _rerunTab(id: string): Promise<void> {
     try {
       const res = await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(id)}/rerun`, { method: 'POST', headers: this._authHeaders() });
-      if (!res.ok) return;
+      if (!res.ok) {
+        this._activeTerminalEl()?.writeStatus('rerun failed');
+        return;
+      }
       this._fetchTerminals();
     } catch {
-      // network error — ignored
+      this._activeTerminalEl()?.writeStatus('rerun failed');
     }
   }
 
   private _clearTerminal(): void {
-    const term = this.shadowRoot?.querySelector('vortex-terminal') as import('./components/vortex-terminal.js').VortexTerminal | null;
+    const term = this._activeTerminalEl();
     void term?.clearOutput();
   }
 
   private _rerunActiveTerminal(): void {
     if (!this._activeId) return;
     void this._rerunTab(this._activeId);
+  }
+
+  private _activeTerminalEl(): import('./components/vortex-terminal.js').VortexTerminal | null {
+    return this.shadowRoot?.querySelector('vortex-terminal') as import('./components/vortex-terminal.js').VortexTerminal | null;
   }
 
   private _authHeaders(): HeadersInit {
