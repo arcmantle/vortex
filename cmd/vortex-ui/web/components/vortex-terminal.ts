@@ -75,6 +75,7 @@ export class VortexTerminal extends LitElement {
 	private _sse?: EventSource;
 	private _ro?: ResizeObserver;
 	private _inputDisposable?: { dispose(): void; };
+	private _contextMenuHandler?: (e: MouseEvent) => void;
 	private _lastReportedSize = '';
 	private _sseErrorShown = false;
 
@@ -88,6 +89,7 @@ export class VortexTerminal extends LitElement {
 			scrollback: 10_000,
 			fontFamily: 'Consolas, "Courier New", monospace',
 			fontSize: 13,
+			rightClickSelectsWord: true,
 		});
 		this._term.loadAddon(new WebLinksAddon((_event, uri) => {
 			void openExternalLink(uri);
@@ -113,6 +115,23 @@ export class VortexTerminal extends LitElement {
 		this._inputDisposable = this._term.onData((data) => {
 			void this._sendInput(data);
 		});
+		// Copy selection to clipboard on Cmd/Ctrl+C (when text is selected)
+		// and on right-click via the context menu.
+		this._term.attachCustomKeyEventHandler((e) => {
+			if (e.type === 'keydown' && e.key === 'c' && (e.metaKey || e.ctrlKey) && this._term?.hasSelection()) {
+				void navigator.clipboard.writeText(this._term.getSelection());
+				return false; // prevent xterm from sending ^C
+			}
+			return true;
+		});
+		this._contextMenuHandler = (e: MouseEvent) => {
+			const sel = this._term?.getSelection();
+			if (sel) {
+				e.preventDefault();
+				void navigator.clipboard.writeText(sel);
+			}
+		};
+		wrap.addEventListener('contextmenu', this._contextMenuHandler);
 		this._fitAddon.fit();
 		void this._reportSize();
 
@@ -146,6 +165,10 @@ export class VortexTerminal extends LitElement {
 		this._disconnectSSE();
 		this._inputDisposable?.dispose();
 		this._inputDisposable = undefined;
+		if (this._contextMenuHandler) {
+			this.shadowRoot?.querySelector('.term-wrap')?.removeEventListener('contextmenu', this._contextMenuHandler as EventListener);
+			this._contextMenuHandler = undefined;
+		}
 		this._term?.dispose();
 	}
 

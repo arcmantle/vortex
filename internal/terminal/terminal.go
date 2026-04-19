@@ -446,8 +446,9 @@ func NewManager() *Manager {
 }
 
 // Start launches a new process in a terminal and registers it. If a terminal
-// with the same ID already exists, the new one inherits the old output buffer
-// so the UI preserves history.
+// with the same ID already exists, the old one is killed and replaced. The new
+// terminal starts with an empty output buffer — the SSE stream stays open
+// across restarts, so seeding old output would cause duplicate replay.
 func (m *Manager) Start(ctx context.Context, id, label, command string, args []string, dir string) (*Terminal, error) {
 	t, err := New(ctx, id, label, command, args, dir)
 	if err != nil {
@@ -456,7 +457,6 @@ func (m *Manager) Start(ctx context.Context, id, label, command string, args []s
 	m.mu.Lock()
 	if old, ok := m.terminals[id]; ok {
 		old.Kill()
-		t.seedFrom(old)
 	} else {
 		m.order = append(m.order, id)
 	}

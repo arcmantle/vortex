@@ -264,8 +264,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Stream output. On the first iteration replay the full buffer;
-		// on restarts the new terminal has its own buffer so replay it too.
+		// Stream output. On the first iteration replay the full buffer so
+		// the client has history. On restarts the new terminal buffer is
+		// empty so only fresh output is sent — old output stays on screen.
 		var chunks []terminal.OutputChunk
 		var ch <-chan terminal.OutputChunk
 		var cancel func()
