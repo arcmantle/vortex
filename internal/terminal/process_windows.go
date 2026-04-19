@@ -24,6 +24,8 @@ type windowsProcess struct {
 }
 
 func (p *windowsProcess) Wait() (int, error) {
+	defer windows.CloseHandle(p.handle)
+
 	_, err := windows.WaitForSingleObject(p.handle, windows.INFINITE)
 	if err != nil {
 		return 1, err
@@ -31,11 +33,7 @@ func (p *windowsProcess) Wait() (int, error) {
 
 	var code uint32
 	if err := windows.GetExitCodeProcess(p.handle, &code); err != nil {
-		_ = windows.CloseHandle(p.handle)
 		return 1, err
-	}
-	if err := windows.CloseHandle(p.handle); err != nil {
-		return int(code), err
 	}
 	if code == 0 {
 		return 0, nil

@@ -11,13 +11,16 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,9 +29,6 @@ import (
 	"arcmantle/vortex/internal/terminal"
 	"arcmantle/vortex/internal/webview"
 )
-
-// HandoffHandler is called when a second instance forwards its arguments.
-type HandoffHandler func(args []string)
 
 // InstanceInfo describes the running Vortex instance served by this process.
 type InstanceInfo struct {
@@ -42,27 +42,27 @@ type Server struct {
 	appCtx         context.Context
 	orch           *orchestrator.Orchestrator
 	static         fs.FS
-	onHandoff      HandoffHandler
 	devMode        bool
 	devServerProxy string // e.g. "http://localhost:5173"
 	instance       InstanceInfo
+	token          string // session token for API authentication
 }
 
 // New creates a Server.
 //   - orch: job orchestrator
 //   - static: embedded FS containing the web UI build output (nil in dev mode)
-//   - onHandoff: called when a second instance forwards its args
 //   - devMode: when true, /api/* is served but static files are not embedded
 //   - devServerURL: Vite dev server URL to proxy static requests to (unused when devMode==false)
-func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, onHandoff HandoffHandler, devMode bool, devServerURL string, instance InstanceInfo) *Server {
+//   - token: session token for API auth (empty string disables auth)
+func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, devMode bool, devServerURL string, instance InstanceInfo, token string) *Server {
 	return &Server{
 		appCtx:         appCtx,
 		orch:           orch,
 		static:         static,
-		onHandoff:      onHandoff,
 		devMode:        devMode,
 		devServerProxy: devServerURL,
 		instance:       instance,
+		token:          token,
 	}
 }
 
@@ -80,7 +80,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/terminals/{id}/size", s.handleResizeTerminal)
 	mux.HandleFunc("DELETE /api/terminals/{id}/buffer", s.handleClearBuffer)
 	mux.HandleFunc("POST /api/open-path", s.handleOpenPath)
-	mux.HandleFunc("POST /handoff", s.handleHandoff)
 
 	if !s.devMode {
 		// Serve the embedded SPA with fallback to index.html.
@@ -89,7 +88,35 @@ func (s *Server) Handler() http.Handler {
 		}))
 	}
 
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Dev mode: add CORS headers for the Vite dev server.
+		if s.devMode && s.devServerProxy != "" {
+			w.Header().Set("Access-Control-Allow-Origin", s.devServerProxy)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+
+		// Token auth: skip for static file serving and dev mode.
+		isAPI := strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/events"
+		if !s.devMode && s.token != "" && isAPI {
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+					token = strings.TrimPrefix(auth, "Bearer ")
+				}
+			}
+			if subtle.ConstantTimeCompare([]byte(token), []byte(s.token)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // --- API handlers ---
@@ -105,7 +132,8 @@ type terminalInfo struct {
 }
 
 func jobToInfo(j *orchestrator.Job) terminalInfo {
-	needs := j.Spec.Needs
+	spec := j.Spec()
+	needs := spec.Needs
 	if needs == nil {
 		needs = []string{}
 	}
@@ -114,10 +142,10 @@ func jobToInfo(j *orchestrator.Job) terminalInfo {
 		pid = term.PID()
 	}
 	return terminalInfo{
-		ID:      j.Spec.ID,
-		Label:   j.Spec.Label,
-		Command: j.Spec.DisplayCommand(),
-		Group:   j.Spec.Group,
+		ID:      spec.ID,
+		Label:   spec.Label,
+		Command: spec.DisplayCommand(),
+		Group:   spec.Group,
 		Needs:   needs,
 		Status:  string(j.Status()),
 		PID:     pid,
@@ -193,11 +221,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	// Restrict CORS: in dev mode allow the Vite dev server; in production
-	// the UI is served from the same origin and no CORS header is needed.
-	if s.devMode && s.devServerProxy != "" {
-		w.Header().Set("Access-Control-Allow-Origin", s.devServerProxy)
-	}
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -206,8 +230,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	firstIteration := true
 
 	for {
 		// Fetch the (possibly new) job for this ID.
@@ -243,36 +265,37 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Stream output. On the first iteration replay the full buffer;
-		// on restarts the client already has the history so only subscribe
-		// to new chunks.
+		// on restarts the new terminal has its own buffer so replay it too.
 		var chunks []terminal.OutputChunk
 		var ch <-chan terminal.OutputChunk
 		var cancel func()
-		if firstIteration {
-			chunks, ch, cancel = term.OutputAndSubscribe()
-			for _, chunk := range chunks {
-				writeSSEChunk(w, chunk)
-			}
-			flusher.Flush()
-			firstIteration = false
-		} else {
-			ch, cancel = term.Subscribe()
+		chunks, ch, cancel = term.OutputAndSubscribe()
+		for _, chunk := range chunks {
+			writeSSEChunk(w, chunk)
 		}
+		flusher.Flush()
 
+		keepalive := time.NewTicker(15 * time.Second)
 		streaming := true
 		for streaming {
 			select {
 			case <-ctx.Done():
+				keepalive.Stop()
 				cancel()
 				return
+			case <-keepalive.C:
+				fmt.Fprintf(w, ": keepalive\n\n")
+				flusher.Flush()
 			case <-s.orch.Restarted():
 				// Job graph replaced while streaming — send exit, loop.
+				keepalive.Stop()
 				cancel()
 				fmt.Fprintf(w, "event: exit\ndata: done\n\n")
 				flusher.Flush()
 				streaming = false
 			case line, open := <-ch:
 				if !open {
+					keepalive.Stop()
 					cancel()
 					fmt.Fprintf(w, "event: exit\ndata: done\n\n")
 					flusher.Flush()
@@ -293,7 +316,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeSSEChunk(w http.ResponseWriter, chunk terminal.OutputChunk) {
-	data, _ := json.Marshal(outputDTO{T: chunk.T.UnixMilli(), Data: base64.StdEncoding.EncodeToString(chunk.Data)})
+	data, err := json.Marshal(outputDTO{T: chunk.T.UnixMilli(), Data: base64.StdEncoding.EncodeToString(chunk.Data)})
+	if err != nil {
+		log.Printf("[server] failed to marshal SSE chunk: %v", err)
+		return
+	}
 	fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
@@ -330,7 +357,7 @@ func (s *Server) handleKillProcesses(w http.ResponseWriter, r *http.Request) {
 		identity, err := instance.NewIdentity(s.instance.RegistryName)
 		if err == nil {
 			if err := instance.MarkControlAction(identity); err != nil {
-				writeJSON(w, struct {
+				writeJSONStatus(w, http.StatusInternalServerError, struct {
 					Killed int    `json:"killed"`
 					Error  string `json:"error,omitempty"`
 				}{Killed: killed, Error: err.Error()})
@@ -474,18 +501,6 @@ func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
-	var payload instance.HandoffPayload
-	if err := decodeJSON(w, r, &payload); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if s.onHandoff != nil {
-		go s.onHandoff(payload.Args)
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
 // --- static SPA helper ---
 
 func serveEmbedded(w http.ResponseWriter, r *http.Request, fsys fs.FS) {
@@ -494,17 +509,14 @@ func serveEmbedded(w http.ResponseWriter, r *http.Request, fsys fs.FS) {
 		path = "index.html"
 	}
 
-	f, err := fsys.Open(path)
-	if err != nil {
+	if _, err := fs.Stat(fsys, path); err != nil {
 		// SPA fallback: serve index.html for unknown paths.
-		f, err = fsys.Open("index.html")
-		if err != nil {
+		if _, err := fs.Stat(fsys, "index.html"); err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		path = "index.html"
 	}
-	f.Close()
 
 	http.ServeFileFS(w, r, fsys, path)
 }
@@ -532,6 +544,19 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_, _ = w.Write([]byte("\n"))
 }
 
+// writeJSONStatus is like writeJSON but sets an explicit HTTP status code.
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(data)
+	_, _ = w.Write([]byte("\n"))
+}
+
 func resolveOpenPathTarget(workDir, rawPath string) (openPathTarget, error) {
 	target := parseTerminalPath(rawPath)
 	if target.Path == "" {
@@ -555,7 +580,42 @@ func resolveOpenPathTarget(workDir, rawPath string) (openPathTarget, error) {
 		path = filepath.Join(workDir, path)
 	}
 
-	target.Path = filepath.Clean(path)
+	path = filepath.Clean(path)
+
+	// Resolve symlinks so that a symlink inside an allowed directory
+	// pointing outside cannot bypass the traversal check.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+
+	// Guard against path traversal: resolved path must be within the working
+	// directory or the user's home directory. This prevents the open-path
+	// API from being used to open arbitrary files on the system.
+	home, _ := os.UserHomeDir()
+	allowed := false
+	resolvedWorkDir := workDir
+	if resolvedWorkDir != "" {
+		if rwd, err := filepath.EvalSymlinks(resolvedWorkDir); err == nil {
+			resolvedWorkDir = rwd
+		}
+	}
+	resolvedHome := home
+	if resolvedHome != "" {
+		if rh, err := filepath.EvalSymlinks(resolvedHome); err == nil {
+			resolvedHome = rh
+		}
+	}
+	if resolvedWorkDir != "" && (path == resolvedWorkDir || strings.HasPrefix(path, resolvedWorkDir+string(filepath.Separator))) {
+		allowed = true
+	}
+	if resolvedHome != "" && (path == resolvedHome || strings.HasPrefix(path, resolvedHome+string(filepath.Separator))) {
+		allowed = true
+	}
+	if !allowed {
+		return openPathTarget{}, fmt.Errorf("path %q is outside the allowed directories", path)
+	}
+
+	target.Path = path
 	return target, nil
 }
 
@@ -595,9 +655,9 @@ func trimTrailingNumber(path string) (string, int) {
 	if len(prefix) == 1 && path[1] == ':' {
 		return path, 0
 	}
-	value := 0
-	for _, r := range segment {
-		value = value*10 + int(r-'0')
+	value, err := strconv.Atoi(segment)
+	if err != nil || value < 0 {
+		return path, 0
 	}
 	return prefix, value
 }

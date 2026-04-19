@@ -190,24 +190,24 @@ import (
 )
 
 var (
-	user32DLL            = windows.NewLazySystemDLL("user32.dll")
-	dwmapiDLL            = windows.NewLazySystemDLL("dwmapi.dll")
-	procGetWindow        = user32DLL.NewProc("GetWindow")
-	procShowWindow       = user32DLL.NewProc("ShowWindow")
-	procIsWindow         = user32DLL.NewProc("IsWindow")
-	procGetWindowLongPtr = user32DLL.NewProc("GetWindowLongPtrW")
-	procSetWindowLongPtr = user32DLL.NewProc("SetWindowLongPtrW")
-	procSetLayeredWindowAttributes = user32DLL.NewProc("SetLayeredWindowAttributes")
-	procDwmSetWindowAttribute = dwmapiDLL.NewProc("DwmSetWindowAttribute")
-	gwChild       uintptr = 5
-	gwHwndNext    uintptr = 2
-	swHide        uintptr = 0
-	swShow        uintptr = 5
-	gwlExStyle    uintptr = ^uintptr(19)
-	wsExLayered   uintptr = 0x00080000
-	lwaAlpha      uintptr = 0x00000002
-	dwmaUseImmersiveDarkMode = uintptr(20)
-	dwmaUseImmersiveDarkModeLegacy = uintptr(19)
+	user32DLL                              = windows.NewLazySystemDLL("user32.dll")
+	dwmapiDLL                              = windows.NewLazySystemDLL("dwmapi.dll")
+	procGetWindow                          = user32DLL.NewProc("GetWindow")
+	procShowWindow                         = user32DLL.NewProc("ShowWindow")
+	procIsWindow                           = user32DLL.NewProc("IsWindow")
+	procGetWindowLongPtr                   = user32DLL.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtr                   = user32DLL.NewProc("SetWindowLongPtrW")
+	procSetLayeredWindowAttributes         = user32DLL.NewProc("SetLayeredWindowAttributes")
+	procDwmSetWindowAttribute              = dwmapiDLL.NewProc("DwmSetWindowAttribute")
+	gwChild                        uintptr = 5
+	gwHwndNext                     uintptr = 2
+	swHide                         uintptr = 0
+	swShow                         uintptr = 5
+	gwlExStyle                     uintptr = ^uintptr(19)
+	wsExLayered                    uintptr = 0x00080000
+	lwaAlpha                       uintptr = 0x00000002
+	dwmaUseImmersiveDarkMode               = uintptr(20)
+	dwmaUseImmersiveDarkModeLegacy         = uintptr(19)
 )
 
 func prefersDarkWindowTheme() bool {
@@ -291,14 +291,19 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 
 	w := webviewlib.NewWindow(false, hostWindow)
 	if w == nil {
+		log.Printf("webview: failed to initialize native window")
 		return
 	}
 	defer w.Destroy()
 
+	runDone := make(chan struct{})
 	if ctx != nil {
 		go func() {
-			<-ctx.Done()
-			w.Terminate()
+			select {
+			case <-ctx.Done():
+				w.Terminate()
+			case <-runDone:
+			}
 		}()
 	}
 
@@ -349,6 +354,8 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 		select {
 		case <-ctx.Done():
 			return
+		case <-runDone:
+			return
 		case <-appReady:
 			w.Dispatch(func() {
 				setHostChildVisibility(hostWindow, overlay, true)
@@ -358,7 +365,8 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 	}()
 
 	w.Run()
-	}
+	close(runDone)
+}
 
 func createHostWindow(width, height int) (unsafe.Pointer, func(), error) {
 	hr := C.initHostCOM()
@@ -385,4 +393,4 @@ func createHostWindow(width, height int) (unsafe.Pointer, func(), error) {
 	}
 
 	return unsafe.Pointer(hwnd), release, nil
-	}
+}

@@ -22,10 +22,6 @@ export default defineConfig({
 					});
 				},
 			},
-			'/handoff': {
-				target: 'http://localhost:7370',
-				changeOrigin: true,
-			},
 		},
 	},
 });

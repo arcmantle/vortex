@@ -12,6 +12,16 @@ import (
 	"arcmantle/vortex/internal/settings"
 )
 
+// startAndReap starts a command and reaps its process entry in the background
+// to prevent zombie processes.
+func startAndReap(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
+}
+
 type OpenFileTarget struct {
 	Path   string
 	Line   int
@@ -30,7 +40,7 @@ func OpenExternalURL(target string) error {
 	}
 
 	if cmd, ok := preferredBrowserCommand(parsed.String()); ok {
-		if err := cmd.Start(); err != nil {
+		if err := startAndReap(cmd); err != nil {
 			return fmt.Errorf("open preferred browser: %w", err)
 		}
 		return nil
@@ -48,7 +58,7 @@ func OpenExternalURL(target string) error {
 		return fmt.Errorf("external browser is unsupported on %s", runtime.GOOS)
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := startAndReap(cmd); err != nil {
 		return fmt.Errorf("open external browser: %w", err)
 	}
 	return nil
@@ -59,7 +69,7 @@ func preferredBrowserCommand(target string) (*exec.Cmd, bool) {
 		if raw == "" {
 			continue
 		}
-		parts := strings.Fields(raw)
+		parts := splitCommandLine(raw)
 		if len(parts) == 0 {
 			continue
 		}
@@ -119,7 +129,7 @@ func RevealPath(target string) error {
 		return fmt.Errorf("path reveal is unsupported on %s", runtime.GOOS)
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := startAndReap(cmd); err != nil {
 		return fmt.Errorf("reveal path: %w", err)
 	}
 	return nil
@@ -140,7 +150,7 @@ func OpenPathInEditor(target OpenFileTarget) error {
 	}
 
 	if cmd, ok := preferredEditorCommand(target); ok {
-		if err := cmd.Start(); err != nil {
+		if err := startAndReap(cmd); err != nil {
 			return fmt.Errorf("open in editor: %w", err)
 		}
 		return nil
@@ -157,7 +167,7 @@ func OpenPathInEditor(target OpenFileTarget) error {
 	default:
 		return fmt.Errorf("editor open is unsupported on %s", runtime.GOOS)
 	}
-	if err := fallback.Start(); err != nil {
+	if err := startAndReap(fallback); err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
 	return nil
@@ -168,7 +178,7 @@ func preferredEditorCommand(target OpenFileTarget) (*exec.Cmd, bool) {
 		if raw == "" {
 			continue
 		}
-		parts := strings.Fields(raw)
+		parts := splitCommandLine(raw)
 		if len(parts) == 0 {
 			continue
 		}
@@ -234,6 +244,37 @@ func appendEditorTargetArgs(command string, args []string, target OpenFileTarget
 	}
 }
 
-func openExternalURL(target string) error {
-	return OpenExternalURL(target)
+// splitCommandLine splits a command string into tokens, respecting single and
+// double quotes so that paths containing spaces (common on Windows and macOS)
+// are preserved as a single token. Unmatched trailing quotes are treated as
+// ending at end-of-string. Examples:
+//
+//	`"C:\Program Files\app.exe" --flag`  → ["C:\Program Files\app.exe", "--flag"]
+//	`code --reuse-window`                → ["code", "--reuse-window"]
+//	`'/Applications/My App.app' -g`      → ["/Applications/My App.app", "-g"]
+func splitCommandLine(s string) []string {
+	var parts []string
+	var current []byte
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case (c == ' ' || c == '\t') && !inSingle && !inDouble:
+			if len(current) > 0 {
+				parts = append(parts, string(current))
+				current = current[:0]
+			}
+		default:
+			current = append(current, c)
+		}
+	}
+	if len(current) > 0 {
+		parts = append(parts, string(current))
+	}
+	return parts
 }

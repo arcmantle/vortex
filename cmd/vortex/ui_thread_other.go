@@ -8,8 +8,9 @@ import (
 )
 
 type uiThreadRunner struct {
-	work chan func()
-	once sync.Once
+	mu     sync.Mutex
+	work   chan func()
+	closed bool
 }
 
 func newUIThreadRunner() *uiThreadRunner {
@@ -26,10 +27,28 @@ func newUIThreadRunner() *uiThreadRunner {
 	return runner
 }
 
+// Post sends fn to the UI thread for execution. It is safe to call
+// concurrently with Close; calls after Close are silently dropped.
 func (runner *uiThreadRunner) Post(fn func()) {
 	if runner == nil || fn == nil {
 		return
 	}
+	runner.mu.Lock()
+	if runner.closed {
+		runner.mu.Unlock()
+		return
+	}
+	select {
+	case runner.work <- fn:
+		runner.mu.Unlock()
+		return
+	default:
+	}
+	runner.mu.Unlock()
+	// Channel full — send without lock so Close() can still proceed.
+	// Close() may fire between the unlock and the send; recover the
+	// resulting send-on-closed-channel panic.
+	defer func() { recover() }()
 	runner.work <- fn
 }
 
@@ -38,5 +57,10 @@ func (runner *uiThreadRunner) Close() {
 	if runner == nil {
 		return
 	}
-	runner.once.Do(func() { close(runner.work) })
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if !runner.closed {
+		runner.closed = true
+		close(runner.work)
+	}
 }

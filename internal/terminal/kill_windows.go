@@ -18,3 +18,9 @@ func killProcessTree(pid int) error {
 	kill.Stderr = nil
 	return kill.Run()
 }
+
+// stopProcessTree on Windows has no portable graceful termination for console
+// processes. Falls back to force kill.
+func stopProcessTree(pid int) error {
+	return killProcessTree(pid)
+}

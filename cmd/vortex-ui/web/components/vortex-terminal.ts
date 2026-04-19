@@ -68,6 +68,7 @@ export class VortexTerminal extends LitElement {
 	];
 
 	@property({ type: Object }) terminal!: TerminalInfo;
+	@property({ type: String }) token = '';
 
 	private _term?: Terminal;
 	private _fitAddon?: FitAddon;
@@ -75,6 +76,7 @@ export class VortexTerminal extends LitElement {
 	private _ro?: ResizeObserver;
 	private _inputDisposable?: { dispose(): void; };
 	private _lastReportedSize = '';
+	private _sseErrorShown = false;
 
 	protected firstUpdated(): void {
 		const wrap = this.shadowRoot!.querySelector('.term-wrap') as HTMLElement;
@@ -101,7 +103,7 @@ export class VortexTerminal extends LitElement {
 					},
 					text: match.text,
 					activate: () => {
-						void revealTerminalPath(match.path);
+						void revealTerminalPath(match.path, this._authHeaders());
 					},
 				})));
 			},
@@ -128,8 +130,9 @@ export class VortexTerminal extends LitElement {
 		if (changed.has('terminal')) {
 			const prev = changed.get('terminal') as TerminalInfo | undefined;
 			if (prev?.id !== this.terminal?.id) {
-				this._term?.clear();
+				this._term?.reset();
 				this._lastReportedSize = '';
+				this._sseErrorShown = false;
 				this._disconnectSSE();
 				this._connectSSE();
 				void this._reportSize();
@@ -148,11 +151,16 @@ export class VortexTerminal extends LitElement {
 
 	private _connectSSE(): void {
 		if (!this.terminal) return;
-		const url = `${API_BASE}/events?id=${encodeURIComponent(this.terminal.id)}`;
+		const params = new URLSearchParams({ id: this.terminal.id });
+		if (this.token) params.set('token', this.token);
+		const url = `${API_BASE}/events?${params.toString()}`;
 		this._sse = new EventSource(url);
 		this._sse.onmessage = (e) => {
-			const chunk = JSON.parse(e.data) as LineDTO;
-			this._term?.write(decodeBase64(chunk.data));
+			try {
+				const chunk = JSON.parse(e.data) as LineDTO;
+				this._term?.write(decodeBase64(chunk.data));
+			} catch { /* ignore corrupt frame */ }
+			this._sseErrorShown = false;
 		};
 		// The server keeps the SSE stream open across process restarts.
 		// "exit" means the process exited, but the stream stays alive —
@@ -167,7 +175,10 @@ export class VortexTerminal extends LitElement {
 			this._term?.write('\r\n\x1b[31m[job failed to start]\x1b[0m\r\n');
 		});
 		this._sse.onerror = () => {
-			this._term?.write('\r\n\x1b[31m[connection lost]\x1b[0m\r\n');
+			if (!this._sseErrorShown) {
+				this._sseErrorShown = true;
+				this._term?.write('\r\n\x1b[31m[connection lost]\x1b[0m\r\n');
+			}
 		};
 	}
 
@@ -176,12 +187,22 @@ export class VortexTerminal extends LitElement {
 		this._sse = undefined;
 	}
 
+	private _authHeaders(): HeadersInit {
+		const headers: HeadersInit = {};
+		if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+		return headers;
+	}
+
 	/** Clear the terminal display and the server-side buffer. */
 	async clearOutput(): Promise<void> {
 		this._term?.clear();
 		this._term?.reset();
 		if (this.terminal) {
-			await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/buffer`, { method: 'DELETE' });
+			try {
+				await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/buffer`, { method: 'DELETE', headers: this._authHeaders() });
+			} catch {
+				// network error — ignored
+			}
 		}
 	}
 
@@ -199,14 +220,14 @@ export class VortexTerminal extends LitElement {
 
 		const key = `${this.terminal.id}:${cols}x${rows}`;
 		if (key === this._lastReportedSize) return;
-		this._lastReportedSize = key;
 
 		try {
 			await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/size`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
 				body: JSON.stringify({ cols, rows }),
 			});
+			this._lastReportedSize = key;
 		} catch {
 			// The terminal may not be available yet; the next resize or reconnect will retry.
 		}
@@ -218,7 +239,7 @@ export class VortexTerminal extends LitElement {
 		try {
 			await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/input`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
 				body: JSON.stringify({ data: encodeBase64(data) }),
 			});
 		} catch {
@@ -259,12 +280,16 @@ async function openExternalLink(url: string): Promise<void> {
 	window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-async function revealTerminalPath(path: string): Promise<void> {
-	await fetch(`${API_BASE}/api/open-path`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ path }),
-	});
+async function revealTerminalPath(path: string, headers: HeadersInit = {}): Promise<void> {
+	try {
+		await fetch(`${API_BASE}/api/open-path`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...headers },
+			body: JSON.stringify({ path }),
+		});
+	} catch {
+		// network error — ignored
+	}
 }
 
 function findFilePathMatches(line: string): FileLinkMatch[] {

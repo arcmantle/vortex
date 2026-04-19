@@ -198,7 +198,7 @@ func latestReleaseForCurrentPlatform() (*release, *releaseAsset, *releaseAsset, 
 	}
 
 	var latest release
-	if err := json.NewDecoder(resp.Body).Decode(&latest); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&latest); err != nil {
 		return nil, nil, nil, fmt.Errorf("decode latest release: %w", err)
 	}
 
@@ -363,6 +363,7 @@ func stopRunningInstance() error {
 		}
 
 		deadline := time.Now().Add(10 * time.Second)
+		stopped := false
 		for time.Now().Before(deadline) {
 			l, first, err = instance.TryLock(identity)
 			if err != nil {
@@ -371,11 +372,12 @@ func stopRunningInstance() error {
 			if first {
 				_ = l.Close()
 				_ = instance.CleanupInactiveMetadata(meta)
+				stopped = true
 				break
 			}
 			time.Sleep(250 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
+		if !stopped {
 			return fmt.Errorf("timed out waiting for the running vortex instance %q to stop", identity.DisplayName)
 		}
 	}
@@ -408,6 +410,9 @@ func ensurePathEntry(dir string) (bool, error) {
 }
 
 func ensureUnixPath(dir string) error {
+	if strings.ContainsAny(dir, "\"'`$;&|\n") {
+		return fmt.Errorf("unsafe characters in path %q", dir)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -503,7 +508,7 @@ func scheduleWindowsReplacement(src string, dst string, waitPID int) error {
 		return err
 	}
 
-	scriptFile, err := os.CreateTemp("", "vortex-upgrade-*.ps1")
+	scriptFile, err := os.CreateTemp(filepath.Dir(dst), "vortex-upgrade-*.ps1")
 	if err != nil {
 		return fmt.Errorf("create upgrade script: %w", err)
 	}
@@ -516,6 +521,8 @@ func scheduleWindowsReplacement(src string, dst string, waitPID int) error {
   [string]$ScriptPath
 )
 
+$logFile = "$env:TEMP\vortex-upgrade.log"
+
 try {
   Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue
   $targetDir = Split-Path -Parent $Target
@@ -523,15 +530,28 @@ try {
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
   }
 
-  for ($i = 0; $i -lt 40; $i++) {
+  $succeeded = $false
+  for ($i = 0; $i -lt 120; $i++) {
     try {
       Copy-Item -LiteralPath $Source -Destination $Target -Force
+      $succeeded = $true
       Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue
       break
     } catch {
       Start-Sleep -Milliseconds 250
     }
   }
+
+  if (-not $succeeded) {
+    $msg = "$(Get-Date -Format o) FAILED: could not replace $Target after 30s retries. Source kept at $Source"
+    Add-Content -LiteralPath $logFile -Value $msg -ErrorAction SilentlyContinue
+  } else {
+    $msg = "$(Get-Date -Format o) OK: upgraded $Target"
+    Add-Content -LiteralPath $logFile -Value $msg -ErrorAction SilentlyContinue
+  }
+} catch {
+  $msg = "$(Get-Date -Format o) ERROR: $($_.Exception.Message)"
+  Add-Content -LiteralPath $logFile -Value $msg -ErrorAction SilentlyContinue
 } finally {
   Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
 }
@@ -636,6 +656,10 @@ func copyFile(src string, dst string) error {
 
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("copy binary: %w", err)
+	}
+
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("sync install target: %w", err)
 	}
 
 	if err := out.Close(); err != nil {

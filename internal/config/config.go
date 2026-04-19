@@ -210,6 +210,9 @@ func resolveOSValue(node *yaml.Node, field string) (string, error) {
 			if _, ok := supportedOSSelectors[normalizedKey]; !ok {
 				return "", fmt.Errorf("%s uses unsupported OS key %q; supported keys: darwin, linux, windows, default", field, key)
 			}
+			if _, dup := normalized[normalizedKey]; dup {
+				return "", fmt.Errorf("%s has duplicate OS key %q (after case normalization)", field, normalizedKey)
+			}
 			normalized[normalizedKey] = values[key]
 		}
 		if value, ok := normalized[runtime.GOOS]; ok {
@@ -286,5 +289,68 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("job %q: if must be \"success\", \"failure\", or \"always\", got %q", j.ID, j.If)
 		}
 	}
+	// Validate: no dependency cycles.
+	if cycle := detectCycle(cfg.Jobs); cycle != nil {
+		return nil, fmt.Errorf("dependency cycle detected: %s", strings.Join(cycle, " -> "))
+	}
 	return &cfg, nil
+}
+
+// detectCycle performs a DFS-based topological sort on the job dependency
+// graph and returns a cycle path if one exists, or nil if the graph is a DAG.
+func detectCycle(jobs []JobSpec) []string {
+	needs := make(map[string][]string, len(jobs))
+	for _, j := range jobs {
+		needs[j.ID] = j.Needs
+	}
+
+	const (
+		white = 0 // not visited
+		gray  = 1 // in current DFS path
+		black = 2 // fully explored
+	)
+
+	color := make(map[string]int, len(jobs))
+	parent := make(map[string]string, len(jobs))
+
+	var dfs func(id string) []string
+	dfs = func(id string) []string {
+		color[id] = gray
+		for _, dep := range needs[id] {
+			switch color[dep] {
+			case gray:
+				// Back edge — reconstruct cycle.
+				cycle := []string{dep, id}
+				cur := id
+				for cur != dep && cur != "" && len(cycle) <= len(jobs) {
+					cur = parent[cur]
+					if cur == "" {
+						break
+					}
+					cycle = append(cycle, cur)
+				}
+				// Reverse to get natural order.
+				for i, j := 0, len(cycle)-1; i < j; i, j = i+1, j-1 {
+					cycle[i], cycle[j] = cycle[j], cycle[i]
+				}
+				return cycle
+			case white:
+				parent[dep] = id
+				if cycle := dfs(dep); cycle != nil {
+					return cycle
+				}
+			}
+		}
+		color[id] = black
+		return nil
+	}
+
+	for _, j := range jobs {
+		if color[j.ID] == white {
+			if cycle := dfs(j.ID); cycle != nil {
+				return cycle
+			}
+		}
+	}
+	return nil
 }

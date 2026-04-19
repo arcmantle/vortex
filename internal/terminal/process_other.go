@@ -14,6 +14,7 @@ const (
 )
 
 func startChildProcess(cmd *exec.Cmd) (startedChildProcess, error) {
+	setChildFlags(cmd)
 	cmd.Env = ensureTerminalEnv(cmd.Environ())
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: defaultPTYCols, Rows: defaultPTYRows})
 	if err != nil {

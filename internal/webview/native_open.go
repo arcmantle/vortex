@@ -15,13 +15,18 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 	windowfocus.ShowApp()
 	w := webviewlib.New(false)
 	if w == nil {
+		log.Printf("webview: failed to initialize native window")
 		return
 	}
 	defer w.Destroy()
+	runDone := make(chan struct{})
 	if ctx != nil {
 		go func() {
-			<-ctx.Done()
-			w.Terminate()
+			select {
+			case <-ctx.Done():
+				w.Terminate()
+			case <-runDone:
+			}
 		}()
 	}
 	controller := nativeController{w: w}
@@ -42,6 +47,7 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 		w.Navigate(url)
 	})
 	w.Run()
+	close(runDone)
 }
 
 func loadingDocument() string {

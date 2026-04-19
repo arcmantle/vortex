@@ -17,7 +17,7 @@ func maybeFork() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("cannot find own executable: %w", err)
 	}
-	args := append(os.Args[1:], "--forked")
+	args := append(append([]string(nil), os.Args[1:]...), "--forked")
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {

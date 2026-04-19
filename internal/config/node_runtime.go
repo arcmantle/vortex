@@ -233,7 +233,7 @@ func (cfg Config) prepareNodeJobCommand(job JobSpec) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return "", nil, fmt.Errorf("create node runtime directory: %w", err)
 	}
 
@@ -242,16 +242,16 @@ func (cfg Config) prepareNodeJobCommand(job JobSpec) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if err := os.WriteFile(sharedPath, []byte(sharedSource), 0o644); err != nil {
+	if err := atomicWriteFile(sharedPath, []byte(sharedSource), 0o600); err != nil {
 		return "", nil, fmt.Errorf("write shared node runtime: %w", err)
 	}
 
-	wrapperPath := filepath.Join(runtimeDir, sanitizeFileComponent(job.ID)+".mjs")
+	wrapperPath := filepath.Join(runtimeDir, sanitizeFileComponent(job.ID)+"-"+hashString(job.ID)[:8]+".mjs")
 	wrapperSource, err := cfg.nodeJobWrapperSource(job, sharedPath)
 	if err != nil {
 		return "", nil, err
 	}
-	if err := os.WriteFile(wrapperPath, []byte(wrapperSource), 0o644); err != nil {
+	if err := atomicWriteFile(wrapperPath, []byte(wrapperSource), 0o600); err != nil {
 		return "", nil, fmt.Errorf("write node job wrapper: %w", err)
 	}
 
@@ -422,7 +422,8 @@ func resolveNodeModuleSpecifier(specifier, workDir string) (string, error) {
 }
 
 func isLocalModuleSpecifier(specifier string) bool {
-	return strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../") || filepath.IsAbs(specifier)
+	cleaned := filepath.ToSlash(specifier)
+	return strings.HasPrefix(cleaned, "./") || strings.HasPrefix(cleaned, "../") || filepath.IsAbs(specifier)
 }
 
 func fileURL(path string) string {
@@ -451,6 +452,10 @@ func sanitizeFileComponent(value string) string {
 			b.WriteRune(r)
 			continue
 		}
+		if r == '/' || r == '\\' {
+			b.WriteString("--")
+			continue
+		}
 		b.WriteByte('_')
 	}
 	return b.String()
@@ -459,7 +464,38 @@ func sanitizeFileComponent(value string) string {
 func hashString(value string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(value))
-	return fmt.Sprintf("%x", h.Sum64())
+	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// atomicWriteFile writes data to a temporary file and renames it to path,
+// preventing concurrent writers from producing a half-written file.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".vortex-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func isValidJSIdentifier(value string) bool {

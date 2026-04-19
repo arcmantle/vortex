@@ -8,5 +8,9 @@
 			"mock/*.vortex",
 			"*.vortex"
 		]
+	},
+	"explorer.fileNesting.enabled": true,
+	"explorer.fileNesting.patterns": {
+		"*.go": "${capture}_test.go"
 	}
 }

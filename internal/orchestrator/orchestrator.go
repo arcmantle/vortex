@@ -12,6 +12,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"arcmantle/vortex/internal/config"
 	"arcmantle/vortex/internal/terminal"
@@ -30,22 +31,23 @@ const (
 
 // Job is a single job with its live runtime state.
 type Job struct {
-	Spec config.JobSpec
-
 	mu     sync.Mutex
+	spec   config.JobSpec
 	status Status
 	term   *terminal.Terminal
 
 	// started is closed once proc is set, or when the job reaches a terminal
 	// state without ever starting a process (skipped / failed to launch).
-	started chan struct{}
+	started     chan struct{}
+	startedOnce sync.Once
 	// done is closed when the job reaches any terminal state.
-	done chan struct{}
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 func newJob(spec config.JobSpec) *Job {
 	return &Job{
-		Spec:    spec,
+		spec:    spec,
 		status:  StatusPending,
 		started: make(chan struct{}),
 		done:    make(chan struct{}),
@@ -56,13 +58,33 @@ func shouldCarryPersistentJob(oldJob *Job, newSpec config.JobSpec, nodeRuntimeCh
 	if oldJob == nil {
 		return false
 	}
-	if oldJob.Spec.ShouldRestart() || newSpec.ShouldRestart() {
+	// Don't carry forward jobs that have already exited — their channels are
+	// closed and reuse would panic.
+	if oldJob.Status() != StatusRunning {
+		return false
+	}
+	if oldJob.Spec().ShouldRestart() || newSpec.ShouldRestart() {
 		return false
 	}
 	if nodeRuntimeChanged && newSpec.UsesNodeRuntime() {
 		return false
 	}
 	return true
+}
+
+// Spec returns a snapshot of the job spec, safe for concurrent use.
+func (j *Job) Spec() config.JobSpec {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.spec
+}
+
+// updateSpec replaces the spec under the job mutex, used by Restart to update
+// metadata on carried-forward persistent jobs.
+func (j *Job) updateSpec(spec config.JobSpec) {
+	j.mu.Lock()
+	j.spec = spec
+	j.mu.Unlock()
 }
 
 // Status returns the current lifecycle state.
@@ -86,6 +108,12 @@ func (j *Job) Started() <-chan struct{} { return j.started }
 
 // Done returns a channel closed when the job reaches any terminal state.
 func (j *Job) Done() <-chan struct{} { return j.done }
+
+// closeStarted safely closes the started channel at most once.
+func (j *Job) closeStarted() { j.startedOnce.Do(func() { close(j.started) }) }
+
+// closeDone safely closes the done channel at most once.
+func (j *Job) closeDone() { j.doneOnce.Do(func() { close(j.done) }) }
 
 func (j *Job) setStatus(s Status) {
 	j.mu.Lock()
@@ -157,8 +185,9 @@ func (o *Orchestrator) resolveLaunchesLocked(ids []string) []jobLaunch {
 		if !ok {
 			continue
 		}
-		deps := make([]*Job, 0, len(job.Spec.Needs))
-		for _, needID := range job.Spec.Needs {
+		spec := job.Spec()
+		deps := make([]*Job, 0, len(spec.Needs))
+		for _, needID := range spec.Needs {
 			if dep, ok := o.jobs[needID]; ok {
 				deps = append(deps, dep)
 			}
@@ -189,24 +218,40 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job, deps []*Job) {
 		return
 	}
 
+	// Snapshot the spec once so all reads are consistent and lock-free.
+	spec := job.Spec()
+
 	// Wait for all dependencies to reach a terminal state.
 	// Persistent running jobs (restart: false) are treated as satisfied.
 	for _, dep := range deps {
-		if !dep.Spec.ShouldRestart() && dep.Status() == StatusRunning {
+		if !dep.Spec().ShouldRestart() && dep.Status() == StatusRunning {
 			continue // persistent job still running — treat as satisfied
 		}
+		timer := time.NewTimer(30 * time.Second)
 		select {
 		case <-dep.Done():
+			timer.Stop()
+		case <-timer.C:
+			log.Printf("[orchestrator] job %q: still waiting on dependency %q after 30s", spec.ID, dep.Spec().ID)
+			select {
+			case <-dep.Done():
+			case <-ctx.Done():
+				job.setStatus(StatusSkipped)
+				job.closeStarted()
+				job.closeDone()
+				return
+			}
 		case <-ctx.Done():
+			timer.Stop()
 			job.setStatus(StatusSkipped)
-			close(job.started)
-			close(job.done)
+			job.closeStarted()
+			job.closeDone()
 			return
 		}
 	}
 
 	// Evaluate the "if" condition.
-	cond := job.Spec.If
+	cond := spec.If
 	if cond == "" {
 		cond = "success"
 	}
@@ -220,40 +265,40 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job, deps []*Job) {
 	case "failure":
 		shouldRun = o.anyFailed(deps)
 	default:
-		log.Printf("[orchestrator] job %q: unknown condition %q, defaulting to success", job.Spec.ID, cond)
+		log.Printf("[orchestrator] job %q: unknown condition %q, defaulting to success", spec.ID, cond)
 		shouldRun = o.allSucceeded(deps)
 	}
 
 	if !shouldRun {
 		job.setStatus(StatusSkipped)
-		close(job.started)
-		close(job.done)
+		job.closeStarted()
+		job.closeDone()
 		return
 	}
 
-	command, args, err := o.cfg.PrepareJobCommand(job.Spec)
+	command, args, err := o.cfg.PrepareJobCommand(spec)
 	if err != nil {
-		log.Printf("[orchestrator] failed to resolve job %q command: %v", job.Spec.ID, err)
+		log.Printf("[orchestrator] failed to resolve job %q command: %v", spec.ID, err)
 		job.setStatus(StatusFailure)
-		close(job.started)
-		close(job.done)
+		job.closeStarted()
+		job.closeDone()
 		return
 	}
 
 	// Start the process in a terminal.
 	job.setStatus(StatusRunning)
-	term, err := o.termMgr.Start(ctx, job.Spec.ID, job.Spec.Label, command, args, o.workDir)
+	term, err := o.termMgr.Start(ctx, spec.ID, spec.Label, command, args, o.workDir)
 	if err != nil {
-		log.Printf("[orchestrator] failed to start job %q: %v", job.Spec.ID, err)
+		log.Printf("[orchestrator] failed to start job %q: %v", spec.ID, err)
 		job.setStatus(StatusFailure)
-		close(job.started)
-		close(job.done)
+		job.closeStarted()
+		job.closeDone()
 		return
 	}
 	job.mu.Lock()
 	job.term = term
 	job.mu.Unlock()
-	close(job.started) // terminal is now available
+	job.closeStarted() // terminal is now available
 
 	// Wait for process to exit and record the outcome.
 	<-term.Done()
@@ -262,13 +307,13 @@ func (o *Orchestrator) runJob(ctx context.Context, job *Job, deps []*Job) {
 	} else {
 		job.setStatus(StatusFailure)
 	}
-	close(job.done)
+	job.closeDone()
 }
 
 func (o *Orchestrator) allSucceeded(deps []*Job) bool {
 	for _, j := range deps {
 		// Persistent running jobs count as succeeded for dependency purposes.
-		if !j.Spec.ShouldRestart() && j.Status() == StatusRunning {
+		if !j.Spec().ShouldRestart() && j.Status() == StatusRunning {
 			continue
 		}
 		if j.Status() != StatusSuccess {
@@ -280,7 +325,7 @@ func (o *Orchestrator) allSucceeded(deps []*Job) bool {
 
 func (o *Orchestrator) anyFailed(deps []*Job) bool {
 	for _, j := range deps {
-		if !j.Spec.ShouldRestart() && j.Status() == StatusRunning {
+		if !j.Spec().ShouldRestart() && j.Status() == StatusRunning {
 			continue
 		}
 		if j.Status() == StatusFailure {
@@ -342,6 +387,11 @@ func (o *Orchestrator) AddAndStart(ctx context.Context, id, label, command strin
 	job := newJob(spec)
 
 	o.mu.Lock()
+	if _, exists := o.jobs[id]; exists {
+		o.mu.Unlock()
+		log.Printf("[orchestrator] AddAndStart: job %q already exists, ignoring duplicate", id)
+		return
+	}
 	o.jobs[id] = job
 	o.order = append(o.order, id)
 	o.mu.Unlock()
@@ -404,7 +454,9 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 		spec.Label = label
 
 		if old, ok := persistent[spec.ID]; ok && !spec.ShouldRestart() {
-			// Carry forward the running job as-is.
+			// Carry forward the running job but update its spec so metadata
+			// (label, env, etc.) reflects the new config.
+			old.updateSpec(spec)
 			newJobs[spec.ID] = old
 		} else {
 			newJobs[spec.ID] = newJob(spec)
@@ -449,7 +501,7 @@ func (o *Orchestrator) Rerun(ctx context.Context, id string) error {
 		}
 		affectedOrder = append(affectedOrder, jobID)
 		job := o.jobs[jobID]
-		savedSpecs[jobID] = job.Spec
+		savedSpecs[jobID] = job.Spec()
 		if term := job.Terminal(); term != nil && job.Status() == StatusRunning {
 			term.Kill()
 			toWait = append(toWait, job.Done())
@@ -487,6 +539,7 @@ func (o *Orchestrator) Rerun(ctx context.Context, id string) error {
 	}
 	close(o.restarted)
 	o.restarted = make(chan struct{})
+	o.gen++
 	o.mu.Unlock()
 
 	for _, l := range launches {
@@ -506,7 +559,7 @@ func (o *Orchestrator) collectDownstreamLocked(id string) map[string]struct{} {
 				continue
 			}
 			job := o.jobs[candidateID]
-			for _, needID := range job.Spec.Needs {
+			for _, needID := range job.Spec().Needs {
 				if needID != current {
 					continue
 				}
@@ -519,14 +572,59 @@ func (o *Orchestrator) collectDownstreamLocked(id string) map[string]struct{} {
 	return affected
 }
 
-// Shutdown kills every running process tree managed by this orchestrator.
+// Shutdown gracefully stops every running process managed by this orchestrator.
+// It first sends SIGTERM (on Unix) and waits up to 5 seconds, then force-kills
+// any processes that haven't exited.
 func (o *Orchestrator) Shutdown() {
 	o.mu.RLock()
+	var terms []*terminal.Terminal
+	var doneChans []<-chan struct{}
+	var pendingJobs []*Job
 	for _, id := range o.order {
 		job := o.jobs[id]
 		if term := job.Terminal(); term != nil {
-			term.Kill()
+			terms = append(terms, term)
+			doneChans = append(doneChans, term.Done())
+		} else {
+			// Job has no terminal — either pending or skipped.
+			pendingJobs = append(pendingJobs, job)
 		}
 	}
 	o.mu.RUnlock()
+
+	// Close started/done channels on pending jobs so their runJob goroutines
+	// can unblock and exit.
+	for _, job := range pendingJobs {
+		job.closeStarted()
+		job.closeDone()
+	}
+
+	if len(terms) == 0 {
+		return
+	}
+
+	// Phase 1: graceful stop (SIGTERM on Unix, no-op on Windows).
+	for _, term := range terms {
+		term.Stop()
+	}
+
+	// Wait up to 5 seconds for all processes to exit gracefully.
+	allDone := make(chan struct{})
+	go func() {
+		for _, ch := range doneChans {
+			<-ch
+		}
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
+		return
+	case <-time.After(5 * time.Second):
+	}
+
+	// Phase 2: force kill remaining.
+	for _, term := range terms {
+		term.Kill()
+	}
 }

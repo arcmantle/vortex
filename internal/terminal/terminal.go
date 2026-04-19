@@ -146,6 +146,7 @@ type Terminal struct {
 	process   processHandle
 	input     inputFunc
 	resize    resizeFunc
+	killOnce  sync.Once // ensures killProcessTree is called at most once
 }
 
 // New creates and starts a Terminal with a child process. The process runs
@@ -162,10 +163,15 @@ func New(ctx context.Context, id, label, command string, args []string, dir stri
 		outputBuf: newOutputBuffer(),
 	}
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	// Use exec.Command (not exec.CommandContext) so only our goroutine
+	// manages the process lifecycle via killProcessTree. CommandContext's
+	// built-in kill sends SIGKILL to the PID only (not the process group),
+	// racing with doKill and potentially orphaning grandchild processes.
+	cmd := exec.Command(command, args...)
 	cmd.Dir = dir
 	started, err := startChildProcess(cmd)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	t.process = started.process
@@ -175,9 +181,7 @@ func New(ctx context.Context, id, label, command string, args []string, dir stri
 	go func() {
 		select {
 		case <-ctx.Done():
-			if pid := t.PID(); pid > 0 {
-				_ = killProcessTree(pid)
-			}
+			t.doKill()
 		case <-t.done:
 		}
 	}()
@@ -193,13 +197,11 @@ func (t *Terminal) WriteInput(data []byte) error {
 	}
 
 	t.mu.RLock()
-	input := t.input
-	exited := t.exited
-	t.mu.RUnlock()
-	if exited || input == nil {
+	defer t.mu.RUnlock()
+	if t.exited || t.input == nil {
 		return nil
 	}
-	return input(data)
+	return t.input(data)
 }
 
 func (t *Terminal) drain(r io.ReadCloser, proc processHandle) {
@@ -233,6 +235,8 @@ func (t *Terminal) drain(r io.ReadCloser, proc processHandle) {
 	t.exited = true
 	t.exitErr = err
 	t.exitCode = code
+	t.input = nil
+	t.resize = nil
 	for _, ch := range t.subs {
 		close(ch)
 	}
@@ -275,19 +279,20 @@ func (t *Terminal) OutputAndSubscribe() ([]OutputChunk, <-chan OutputChunk, func
 	t.subs = append(t.subs, ch)
 	t.mu.Unlock()
 
+	var once sync.Once
 	cancel := func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		for i, s := range t.subs {
-			if s == ch {
-				t.subs = append(t.subs[:i], t.subs[i+1:]...)
-				for len(ch) > 0 {
-					<-ch
+		once.Do(func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			for i, s := range t.subs {
+				if s == ch {
+					t.subs = append(t.subs[:i], t.subs[i+1:]...)
+					close(ch)
+					return
 				}
-				close(ch)
-				return
 			}
-		}
+			// Not found: drain() already closed the channel.
+		})
 	}
 	return snapshot, ch, cancel
 }
@@ -313,19 +318,20 @@ func (t *Terminal) Subscribe() (<-chan OutputChunk, func()) {
 	t.subs = append(t.subs, ch)
 	t.mu.Unlock()
 
+	var once sync.Once
 	cancel := func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		for i, s := range t.subs {
-			if s == ch {
-				t.subs = append(t.subs[:i], t.subs[i+1:]...)
-				for len(ch) > 0 {
-					<-ch
+		once.Do(func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			for i, s := range t.subs {
+				if s == ch {
+					t.subs = append(t.subs[:i], t.subs[i+1:]...)
+					close(ch)
+					return
 				}
-				close(ch)
-				return
 			}
-		}
+			// Not found: drain() already closed the channel.
+		})
 	}
 	return ch, cancel
 }
@@ -338,12 +344,11 @@ func (t *Terminal) Resize(cols, rows uint16) error {
 	}
 
 	t.mu.RLock()
-	resize := t.resize
-	t.mu.RUnlock()
-	if resize == nil {
+	defer t.mu.RUnlock()
+	if t.exited || t.resize == nil {
 		return nil
 	}
-	return resize(cols, rows)
+	return t.resize(cols, rows)
 }
 
 // Done returns a channel closed when the process has exited.
@@ -380,13 +385,30 @@ func (t *Terminal) ClearBuffer() {
 	t.mu.Unlock()
 }
 
+// doKill performs the actual process tree kill, guarded by sync.Once to
+// prevent double-kill races between the context-cancel goroutine and
+// explicit Kill() calls.
+func (t *Terminal) doKill() {
+	t.killOnce.Do(func() {
+		if pid := t.PID(); pid > 0 {
+			_ = killProcessTree(pid)
+		}
+	})
+}
+
 // Kill terminates the child process tree. It is safe to call multiple times.
 func (t *Terminal) Kill() {
-	if pid := t.PID(); pid > 0 {
-		_ = killProcessTree(pid) // best effort; process may have already exited
-	}
+	t.doKill()
 	if t.cancel != nil {
 		t.cancel()
+	}
+}
+
+// Stop sends a graceful termination signal (SIGTERM on Unix, no-op on Windows)
+// without force-killing the process. Use Kill() to force termination.
+func (t *Terminal) Stop() {
+	if pid := t.PID(); pid > 0 {
+		_ = stopProcessTree(pid)
 	}
 }
 
@@ -433,6 +455,7 @@ func (m *Manager) Start(ctx context.Context, id, label, command string, args []s
 	}
 	m.mu.Lock()
 	if old, ok := m.terminals[id]; ok {
+		old.Kill()
 		t.seedFrom(old)
 	} else {
 		m.order = append(m.order, id)

@@ -320,3 +320,56 @@ export async function describeFile(filePath) {
 func contains(haystack, needle string) bool {
 	return strings.Contains(haystack, needle)
 }
+
+func TestDetectCycleNoCycle(t *testing.T) {
+	jobs := []JobSpec{
+		{ID: "a", Needs: []string{"b"}},
+		{ID: "b", Needs: []string{"c"}},
+		{ID: "c"},
+	}
+	if cycle := detectCycle(jobs); cycle != nil {
+		t.Fatalf("detectCycle() = %v, want nil", cycle)
+	}
+}
+
+func TestDetectCycleDirectSelfLoop(t *testing.T) {
+	jobs := []JobSpec{
+		{ID: "a", Needs: []string{"a"}},
+	}
+	cycle := detectCycle(jobs)
+	if cycle == nil {
+		t.Fatal("detectCycle() = nil, want cycle")
+	}
+	if len(cycle) < 2 || cycle[0] != "a" || cycle[len(cycle)-1] != "a" {
+		t.Fatalf("detectCycle() = %v, want [a ... a]", cycle)
+	}
+}
+
+func TestDetectCycleIndirect(t *testing.T) {
+	jobs := []JobSpec{
+		{ID: "a", Needs: []string{"b"}},
+		{ID: "b", Needs: []string{"c"}},
+		{ID: "c", Needs: []string{"a"}},
+	}
+	cycle := detectCycle(jobs)
+	if cycle == nil {
+		t.Fatal("detectCycle() = nil, want cycle")
+	}
+	if len(cycle) < 2 {
+		t.Fatalf("detectCycle() = %v, want at least 2 elements", cycle)
+	}
+}
+
+func TestLoadRejectsCyclicDependencies(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dev.vortex")
+	data := []byte("name: dev\njobs:\n  - id: a\n    command: echo a\n    needs: [b]\n  - id: b\n    command: echo b\n    needs: [a]\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !contains(err.Error(), "dependency cycle") {
+		t.Fatalf("Load() error = %v, want dependency cycle", err)
+	}
+}
