@@ -19,6 +19,18 @@
 		"node": {
 			"$ref": "#/definitions/nodeRuntime"
 		},
+		"bun": {
+			"$ref": "#/definitions/bunRuntime"
+		},
+		"deno": {
+			"$ref": "#/definitions/denoRuntime"
+		},
+		"csharp": {
+			"$ref": "#/definitions/csharpRuntime"
+		},
+		"go": {
+			"$ref": "#/definitions/goRuntime"
+		},
 		"jobs": {
 			"type": "array",
 			"minItems": 1,
@@ -101,6 +113,125 @@
 					}
 				]
 			}
+		},
+		{
+			"label": "Bun shared runtime",
+			"body": {
+				"name": "$1",
+				"bun": {
+					"imports": [
+						{
+							"from": "node:path",
+							"names": [
+								"basename"
+							]
+						}
+					],
+					"vars": {
+						"apiBase": "http://localhost:3000"
+					},
+					"functions": {
+						"logBanner": "export function logBanner(text) {\n  console.log(text)\n}"
+					}
+				},
+				"jobs": [
+					{
+						"id": "$2",
+						"shell": "bun",
+						"use": "bun",
+						"command": "logBanner(apiBase)\nconsole.log(basename('/tmp/demo.txt'))"
+					}
+				]
+			}
+		},
+		{
+			"label": "Deno shared runtime",
+			"body": {
+				"name": "$1",
+				"deno": {
+					"imports": [
+						{
+							"from": "https://deno.land/std/path/mod.ts",
+							"names": [
+								"basename"
+							]
+						}
+					],
+					"vars": {
+						"apiBase": "http://localhost:3000"
+					},
+					"functions": {
+						"logBanner": "export function logBanner(text) {\n  console.log(text)\n}"
+					}
+				},
+				"jobs": [
+					{
+						"id": "$2",
+						"shell": "deno",
+						"use": "deno",
+						"command": "logBanner(apiBase)\nconsole.log(basename('/tmp/demo.txt'))"
+					}
+				]
+			}
+		},
+		{
+			"label": "C# shared runtime",
+			"body": {
+				"name": "$1",
+				"csharp": {
+					"usings": [
+						"System.IO"
+					],
+					"packages": [
+						{
+							"name": "Newtonsoft.Json",
+							"version": "13.0.3"
+						}
+					],
+					"vars": {
+						"apiBase": "http://localhost:3000"
+					},
+					"functions": {
+						"LogBanner": "public static void LogBanner(string text)\n{\n    Console.WriteLine($\"== {text} ==\");\n}"
+					}
+				},
+				"jobs": [
+					{
+						"id": "$2",
+						"shell": "csharp",
+						"use": "csharp",
+						"command": "LogBanner(apiBase);\nConsole.WriteLine(Path.GetFileName(\"/tmp/demo.txt\"));"
+					}
+				]
+			}
+		},
+		{
+			"label": "Go shared runtime",
+			"body": {
+				"name": "$1",
+				"go": {
+					"imports": [
+						{
+							"path": "fmt",
+							"version": "std"
+						}
+					],
+					"vars": {
+						"apiBase": "http://localhost:3000"
+					},
+					"functions": {
+						"logBanner": "func logBanner(text string) {\n\tfmt.Printf(\"== %s ==\\n\", text)\n}"
+					}
+				},
+				"jobs": [
+					{
+						"id": "$2",
+						"shell": "go",
+						"use": "go",
+						"command": "logBanner(apiBase)\nfmt.Println(\"hello from vortex\")"
+					}
+				]
+			}
 		}
 	],
 	"definitions": {
@@ -122,7 +253,9 @@
 				"python3",
 				"node",
 				"deno",
-				"bun"
+				"bun",
+				"csharp",
+				"go"
 			]
 		},
 		"osSelectorKeys": {
@@ -267,6 +400,18 @@
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
+				"typescript": {
+					"type": "boolean",
+					"description": "Enable TypeScript mode. When true, generated wrappers use .mts and are bundled via esbuild before running with Node. Auto-detected when any source has a .ts/.mts/.cts extension."
+				},
+				"sources": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Local .mjs/.js/.ts/.mts files included as namespace imports. Each file's exports are available via a camelCase namespace derived from the filename (e.g. run-helper.mjs → runHelper)."
+				},
 				"imports": {
 					"type": "array",
 					"items": {
@@ -292,6 +437,234 @@
 				}
 			}
 		},
+		"bunRuntime": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"typescript": {
+					"type": "boolean",
+					"description": "Enable TypeScript mode. When true, generated wrappers use .mts (Bun runs TypeScript natively). Auto-detected when any source has a .ts/.mts/.cts extension."
+				},
+				"sources": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Local .mjs/.js/.ts/.mts files included as namespace imports. Each file's exports are available via a camelCase namespace derived from the filename (e.g. run-helper.mjs → runHelper)."
+				},
+				"imports": {
+					"type": "array",
+					"items": {
+						"$ref": "#/definitions/nodeImport"
+					}
+				},
+				"vars": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/jsIdentifier"
+					},
+					"additionalProperties": true
+				},
+				"functions": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/jsIdentifier"
+					},
+					"additionalProperties": {
+						"type": "string",
+						"minLength": 1
+					}
+				}
+			}
+		},
+		"denoRuntime": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"typescript": {
+					"type": "boolean",
+					"description": "Enable TypeScript mode. When true, generated wrappers use .mts (Deno runs TypeScript natively). Auto-detected when any source has a .ts/.mts/.cts extension."
+				},
+				"sources": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Local .mjs/.js/.ts/.mts files included as namespace imports. Each file's exports are available via a camelCase namespace derived from the filename."
+				},
+				"imports": {
+					"type": "array",
+					"items": {
+						"$ref": "#/definitions/nodeImport"
+					}
+				},
+				"vars": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/jsIdentifier"
+					},
+					"additionalProperties": true
+				},
+				"functions": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/jsIdentifier"
+					},
+					"additionalProperties": {
+						"type": "string",
+						"minLength": 1
+					}
+				}
+			}
+		},
+		"csharpIdentifier": {
+			"type": "string",
+			"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+		},
+		"csharpPackage": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"name",
+				"version"
+			],
+			"properties": {
+				"name": {
+					"type": "string",
+					"minLength": 1,
+					"description": "NuGet package name."
+				},
+				"version": {
+					"type": "string",
+					"minLength": 1,
+					"description": "NuGet package version."
+				}
+			}
+		},
+		"csharpRuntime": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"framework": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Target framework moniker (e.g. net8.0, net9.0). Defaults to net8.0."
+				},
+				"sources": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Local .cs files copied into the generated project. Classes and methods defined in these files are available in job commands."
+				},
+				"usings": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Additional using directives injected into the shared source."
+				},
+				"packages": {
+					"type": "array",
+					"items": {
+						"$ref": "#/definitions/csharpPackage"
+					},
+					"description": "NuGet package references added to the generated project."
+				},
+				"vars": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/csharpIdentifier"
+					},
+					"additionalProperties": true,
+					"description": "Variables exposed as public static readonly fields on the Vortex class."
+				},
+				"functions": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/csharpIdentifier"
+					},
+					"additionalProperties": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Static methods added to the Vortex class, accessible via using static."
+				}
+			}
+		},
+		"goIdentifier": {
+			"type": "string",
+			"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+		},
+		"goModule": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"path",
+				"version"
+			],
+			"properties": {
+				"path": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Go module path (e.g. github.com/fatih/color)."
+				},
+				"version": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Module version (e.g. v1.16.0)."
+				}
+			}
+		},
+		"goRuntime": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"module": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Go module name for the generated project. Defaults to vortex/runtime."
+				},
+				"sources": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Local .go files copied into the generated project. Functions and types defined in these files are available in job commands."
+				},
+				"imports": {
+					"type": "array",
+					"items": {
+						"$ref": "#/definitions/goModule"
+					},
+					"description": "Go module dependencies added to go.mod."
+				},
+				"vars": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/goIdentifier"
+					},
+					"additionalProperties": true,
+					"description": "Variables exposed as package-level var declarations."
+				},
+				"functions": {
+					"type": "object",
+					"propertyNames": {
+						"$ref": "#/definitions/goIdentifier"
+					},
+					"additionalProperties": {
+						"type": "string",
+						"minLength": 1
+					},
+					"description": "Top-level function declarations available in all job commands."
+				}
+			}
+		},
 		"job": {
 			"type": "object",
 			"additionalProperties": false,
@@ -314,9 +687,13 @@
 				"use": {
 					"type": "string",
 					"enum": [
-						"node"
+						"node",
+						"bun",
+						"deno",
+						"csharp",
+						"go"
 					],
-					"description": "Opt the job into the top-level shared runtime. V1 supports only `node` and requires `shell: node`."
+					"description": "Opt the job into the top-level shared runtime. Supports `node` (requires `shell: node`), `bun` (requires `shell: bun`), `deno` (requires `shell: deno`), `csharp` (requires `shell: csharp`), and `go` (requires `shell: go`)."
 				},
 				"shell": {
 					"oneOf": [

@@ -54,7 +54,7 @@ func newJob(spec config.JobSpec) *Job {
 	}
 }
 
-func shouldCarryPersistentJob(oldJob *Job, newSpec config.JobSpec, nodeRuntimeChanged bool) bool {
+func shouldCarryPersistentJob(oldJob *Job, newSpec config.JobSpec, nodeRuntimeChanged, bunRuntimeChanged, denoRuntimeChanged, csharpRuntimeChanged, goRuntimeChanged bool) bool {
 	if oldJob == nil {
 		return false
 	}
@@ -67,6 +67,18 @@ func shouldCarryPersistentJob(oldJob *Job, newSpec config.JobSpec, nodeRuntimeCh
 		return false
 	}
 	if nodeRuntimeChanged && newSpec.UsesNodeRuntime() {
+		return false
+	}
+	if bunRuntimeChanged && newSpec.UsesBunRuntime() {
+		return false
+	}
+	if denoRuntimeChanged && newSpec.UsesDenoRuntime() {
+		return false
+	}
+	if csharpRuntimeChanged && newSpec.UsesCSharpRuntime() {
+		return false
+	}
+	if goRuntimeChanged && newSpec.UsesGoRuntime() {
 		return false
 	}
 	return true
@@ -408,8 +420,16 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	o.mu.Lock()
 	keepIDs := make(map[string]struct{}, len(cfg.Jobs))
 	nodeRuntimeChanged := false
+	bunRuntimeChanged := false
+	denoRuntimeChanged := false
+	csharpRuntimeChanged := false
+	goRuntimeChanged := false
 	if o.cfg != nil {
 		nodeRuntimeChanged = !o.cfg.Node.Equal(cfg.Node)
+		bunRuntimeChanged = !o.cfg.Bun.Equal(cfg.Bun)
+		denoRuntimeChanged = !o.cfg.Deno.Equal(cfg.Deno)
+		csharpRuntimeChanged = !o.cfg.CSharp.Equal(cfg.CSharp)
+		goRuntimeChanged = !o.cfg.Go.Equal(cfg.Go)
 	}
 	for _, spec := range cfg.Jobs {
 		keepIDs[spec.ID] = struct{}{}
@@ -426,7 +446,7 @@ func (o *Orchestrator) Restart(ctx context.Context, cfg *config.Config) {
 	for _, id := range o.order {
 		job := o.jobs[id]
 		nextSpec, stillPresent := nextSpecs[id]
-		if stillPresent && shouldCarryPersistentJob(job, nextSpec, nodeRuntimeChanged) {
+		if stillPresent && shouldCarryPersistentJob(job, nextSpec, nodeRuntimeChanged, bunRuntimeChanged, denoRuntimeChanged, csharpRuntimeChanged, goRuntimeChanged) {
 			persistent[id] = job
 			continue
 		}

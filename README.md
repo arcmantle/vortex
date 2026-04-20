@@ -6,112 +6,226 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-## Features
+## What Is Vortex?
 
-- **Dependency-aware execution** — jobs declare what they `needs`, with conditions (`success`, `failure`, `always`) inspired by GitHub Actions
-- **Live terminal output** — each job streams stdout/stderr into its own xterm.js terminal panel via SSE
-- **Clickable terminal links** — `http` and `https` URLs open in your external browser, and file paths open in your editor using `vortex config set editor ...`, `VORTEX_EDITOR`, `VISUAL`, or `EDITOR`
-- **Native webview** — opens as a standalone desktop window (Edge WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux)
-- **Job groups** — organize related jobs under collapsible groups in the UI
-- **Named instances** — every Vortex config declares a required `name`, and Vortex routes restart / quit commands to that specific running instance
-- **Persistent jobs** — mark long-running jobs with `restart: false` to keep them alive across config reloads
-- **Embedded UI** — production builds embed the frontend into the Go binary (zero external files)
+Vortex lets you define a set of tasks (called **jobs**) in a simple YAML file and run them all at once. Each job gets its own live terminal panel in a desktop window, so you can watch logs, errors, and output in real time.
+
+**Use it when you need to:**
+- Start multiple services during development (API server, frontend, database, etc.)
+- Run build steps in order (lint → build → test → deploy)
+- Automate multi-step workflows with real-time visibility
 
 ## Quick Start
 
-### Config file
+### 1. Create a config file
 
-Vortex config files use the `.vortex` extension and YAML syntax.
+Vortex config files use the `.vortex` extension with YAML syntax:
 
 ```yaml
 # dev.vortex
 name: dev
 
 jobs:
-  - id: build
-    label: Build
-    command: go build ./...
-    group: ci
+  - id: server
+    label: API Server
+    command: go run ./cmd/server
+
+  - id: frontend
+    label: Frontend
+    command: npm run dev
 
   - id: test
-    label: Test
+    label: Tests
     command: go test ./...
-    group: ci
-    needs: [build]
-
-  - id: deploy
-    label: Deploy
-    shell: bash
-    command: ./deploy.sh --verify
-    needs: [test]
-    if: success
-
-  - id: smoke-node
-    label: Node Smoke
-    shell: node
-    command: |
-      console.log('smoke test starting')
-      console.log(process.version)
+    needs: [server]
 ```
+
+### 2. Run it
 
 ```sh
 vortex run dev.vortex
+```
+
+That's it. Vortex opens a native window with a terminal panel for each job, streaming output in real time.
+
+<details>
+<summary><strong>Shorthand: you can omit the .vortex extension</strong></summary>
+
+```sh
 vortex run dev
 ```
 
-To create a new template config with a schema comment pinned to the version of `vortex` you are running:
+Vortex looks for `dev.vortex` in the current directory.
+
+</details>
+
+### 3. Create a template config
 
 ```sh
 vortex init
 vortex init my-app
-vortex init configs/dev.vortex
 ```
 
-`vortex init` writes a `.vortex` file, adds a top-of-file `yaml-language-server` schema comment, and uses the running Vortex version to choose the schema URL:
+This creates a `.vortex` file with a schema comment for editor autocompletion.
 
-- `dev` builds point at `master`
-- release builds point at the matching `v<version>` tag
+## Features
 
-Run `vortex help` to see the CLI commands and examples directly in the terminal, or `vortex docs` to open this README as embedded app documentation.
+- **Dependency-aware execution** — jobs declare what they `needs`, and Vortex runs them in the right order
+- **Live terminal output** — each job gets its own terminal panel with real-time stdout/stderr
+- **Clickable links** — URLs open in your browser, file paths open in your editor
+- **Native desktop window** — runs as a standalone app (not in the browser)
+- **Job groups** — organize related jobs under collapsible headings
+- **Named instances** — multiple configs can run side by side without conflicts
+- **Persistent jobs** — long-running services survive config reloads with `restart: false`
+
+<details>
+<summary><strong>How clickable links work</strong></summary>
+
+When you click an `http://` or `https://` link in the terminal, Vortex opens it in a browser. The browser is resolved in this order:
+
+1. `VORTEX_BROWSER` environment variable
+2. `vortex config set browser "firefox"` setting
+3. `BROWSER` environment variable
+4. OS default browser
+
+When you click a file path, Vortex opens it in an editor:
+
+1. `VORTEX_EDITOR` environment variable
+2. `vortex config set editor "code"` setting
+3. `VISUAL` environment variable
+4. `EDITOR` environment variable
+5. OS default file opener
+
+</details>
 
 ## Config Reference
 
-Top-level config fields:
+Every `.vortex` file has two required fields: `name` and `jobs`.
 
-| Field  | Type     | Description                                                                  |
-|--------|----------|------------------------------------------------------------------------------|
-| `name` | `string` | **Required.** Instance name used to target restarts and `vortex <name> --quit`. |
-| `node` | `object` | Optional shared Node runtime block. Declares imports, vars, and functions for opted-in Node jobs. |
-| `jobs` | `Job[]`  | **Required.** Jobs to run in this instance.                                  |
+```yaml
+name: my-project    # identifies this running instance
 
-Each job supports:
+jobs:               # list of tasks to run
+  - id: build
+    command: go build ./...
+```
 
-| Field     | Type       | Description                                                             |
-|-----------|------------|-------------------------------------------------------------------------|
-| `id`      | `string`   | **Required.** Unique identifier, used in `needs` references.            |
-| `label`   | `string`   | Display name in the UI. Defaults to `id`.                               |
-| `use`     | `string`   | Optional shared runtime selection. V1 supports only `node`, and only on `shell: node` jobs. |
-| `shell`   | `string \| object` | Optional interpreter for script blocks. Accepts either a plain shell string or an OS selector object with `darwin`, `linux`, `windows`, and `default` keys. |
-| `command` | `string \| object` | **Required.** Direct command line when `shell` is omitted, or script text when `shell` is set. Accepts either a plain string or an OS selector object with `darwin`, `linux`, `windows`, and `default` keys. |
-| `group`   | `string`   | Optional group name — jobs in the same group are visually grouped.      |
-| `needs`   | `string[]` | IDs of jobs that must complete before this one starts.                  |
-| `if`      | `string`   | When to run: `success` (default), `failure`, or `always`.               |
-| `restart` | `bool`     | Whether to kill and re-launch on restart. Defaults to `true`.           |
+### Job Fields
 
-### Shared Node Runtime
+| Field     | Required | Description |
+|-----------|----------|-------------|
+| `id`      | Yes | Unique name for this job. Used in `needs` references. |
+| `command` | Yes | What to run. A direct command, or script text when `shell` is set. |
+| `label`   | No | Display name in the UI. Defaults to `id`. |
+| `shell`   | No | Interpreter for the command (e.g. `bash`, `node`, `python`). |
+| `use`     | No | Connect to a shared runtime (`node`, `bun`, `deno`, `csharp`, `go`). |
+| `group`   | No | Visual grouping in the UI. Jobs with the same group appear together. |
+| `needs`   | No | List of job IDs that must finish before this job starts. |
+| `if`      | No | When to run: `success` (default), `failure`, or `always`. |
+| `restart` | No | Set to `false` to keep long-running jobs alive across config reloads. |
 
-Vortex can now expose a shared Node runtime to opted-in Node jobs. This is useful when you want a `.vortex` file to declare imports, variables, and lightweight helper functions that multiple jobs can use.
+### Shells
+
+When `shell` is omitted, Vortex splits `command` into words and runs it directly.
+When `shell` is set, Vortex passes `command` as a script to that interpreter.
+
+Supported shells: `bash`, `sh`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `python`, `python3`, `node`, `bun`, `deno`, `csharp`, `go`
+
+<details>
+<summary><strong>OS-specific commands and shells</strong></summary>
+
+Both `shell` and `command` can be objects with OS-specific values:
+
+```yaml
+jobs:
+  - id: cross-platform
+    shell:
+      default: bash
+      windows: pwsh
+    command:
+      default: echo hello from vortex
+      windows: Write-Host hello from vortex
+```
+
+Supported keys: `darwin`, `linux`, `windows`, `default`
+
+</details>
+
+### Dependencies
+
+Use `needs` to control execution order:
+
+```yaml
+jobs:
+  - id: build
+    command: go build ./...
+
+  - id: test
+    command: go test ./...
+    needs: [build]       # waits for build to finish
+
+  - id: deploy
+    command: ./deploy.sh
+    needs: [test]        # waits for test to finish
+    if: success          # only runs if test succeeded
+```
+
+The `if` field controls when a dependent job runs:
+- `success` (default) — run only if all dependencies succeeded
+- `failure` — run only if any dependency failed
+- `always` — run regardless of dependency outcome
+
+### Groups
+
+Organize related jobs visually:
+
+```yaml
+jobs:
+  - id: build
+    command: go build ./...
+    group: ci
+
+  - id: test
+    command: go test ./...
+    group: ci
+
+  - id: server
+    command: go run ./cmd/server
+    group: services
+```
+
+### Top-Level Fields
+
+| Field    | Type     | Description |
+|----------|----------|-------------|
+| `name`   | `string` | **Required.** Unique instance name. |
+| `node`   | `object` | Shared Node.js runtime. See [JavaScript Runtimes Guide](docs/runtimes-javascript.md). |
+| `bun`    | `object` | Shared Bun runtime. See [JavaScript Runtimes Guide](docs/runtimes-javascript.md). |
+| `deno`   | `object` | Shared Deno runtime. See [JavaScript Runtimes Guide](docs/runtimes-javascript.md). |
+| `csharp` | `object` | Shared C# runtime. See [C# Runtime Guide](docs/runtimes-csharp.md). |
+| `go`     | `object` | Shared Go runtime. See [Go Runtime Guide](docs/runtimes-go.md). |
+| `jobs`   | `Job[]`  | **Required.** List of jobs to run. |
+
+## Shared Runtimes
+
+Shared runtimes let you define **imports, variables, and helper functions once** and reuse them across multiple jobs. This avoids repeating setup code in every job.
+
+Vortex supports five runtime environments:
+
+| Runtime | Guide | TypeScript |
+|---------|-------|------------|
+| **Node** | [JavaScript Runtimes Guide](docs/runtimes-javascript.md) | Yes (via esbuild) |
+| **Bun** | [JavaScript Runtimes Guide](docs/runtimes-javascript.md) | Yes (native) |
+| **Deno** | [JavaScript Runtimes Guide](docs/runtimes-javascript.md) | Yes (native) |
+| **C#** | [C# Runtime Guide](docs/runtimes-csharp.md) | — |
+| **Go** | [Go Runtime Guide](docs/runtimes-go.md) | — |
+
+### Quick Example (Node)
 
 ```yaml
 name: dev
 
 node:
-  imports:
-    - from: node:path
-      names: [basename]
-    - from: ./scripts/helpers.mjs
-      namespace: helpers
-
   vars:
     apiBase: http://localhost:3000
 
@@ -122,34 +236,140 @@ node:
       }
 
 jobs:
-  - id: smoke-node
+  - id: check-api
     shell: node
     use: node
     command: |
-      logBanner(apiBase)
-      console.log(basename('/tmp/demo.txt'))
-      console.log(helpers.slug('Hello World'))
+      logBanner(`Checking ${apiBase}`)
+      const resp = await fetch(apiBase)
+      console.log(resp.status)
 ```
 
-Notes:
+Both `logBanner` and `apiBase` are available in every job that has `use: node`.
 
-- `use: node` is required for a job to see the top-level `node` runtime.
-- Only `shell: node` jobs can use `use: node`.
-- Shared-runtime Node jobs are executed through generated `.mjs` wrapper files instead of `node -e`, so ESM imports, `node:` built-ins, package imports, and local module imports work predictably.
-- If you reload a running Vortex instance with a changed top-level `node` block, opted-in `use: node` jobs are restarted so they pick up the new shared runtime, even if they were previously being carried forward with `restart: false`.
-- `node.imports` supports four forms: `default`, `namespace`, `names`, and `named` alias mappings.
-- `node.vars` values are exposed as exported JavaScript constants.
-- `node.functions` entries must export a function with the same name as their YAML key.
+<details>
+<summary><strong>How shared runtimes work under the hood</strong></summary>
+
+When a job uses a shared runtime, Vortex generates wrapper files in `~/.cache/vortex/{runtime}-runtime/`:
+
+- **JavaScript (Node/Bun/Deno)**: generates ESM `.mjs` (or `.mts` for TypeScript) modules that re-export all shared code, then runs the wrapper with the appropriate runtime binary.
+- **C#**: generates a .NET project with a `Shared.cs` class and a `Program.cs` per job, then runs via `dotnet run`.
+- **Go**: generates a Go project with `shared.go` and `main.go` per job, then runs via `go run .`.
+
+If you change a runtime block and reload the config, all opted-in jobs restart automatically to pick up the changes — even persistent jobs with `restart: false`.
+
+</details>
+
+For full documentation on each runtime, see the linked guides above.
+
+## CLI Reference
+
+### Running
+
+```sh
+vortex run dev.vortex           # run a config file
+vortex run dev                  # shorthand (finds dev.vortex)
+vortex run --headless dev       # run without opening a window
+```
+
+### Creating Configs
+
+```sh
+vortex init                     # create a template .vortex file
+vortex init my-app              # create my-app.vortex
+vortex init --force             # overwrite existing file
+```
+
+### Managing Instances
+
+```sh
+vortex instance list            # show running instances
+vortex instance quit dev        # stop an instance
+vortex instance kill dev        # kill child processes only
+vortex instance rerun dev build # rerun a job and its dependents
+vortex instance show dev        # open the native window
+vortex instance hide dev        # close the window (keep running)
+```
+
+### Settings
+
+```sh
+vortex config list              # show all settings
+vortex config set browser firefox
+vortex config set editor code
+vortex config get editor
+vortex config unset browser
+```
+
+### Other
+
+```sh
+vortex docs                     # open built-in documentation
+vortex docs --force             # regenerate docs
+vortex upgrade                  # upgrade to latest release
+vortex upgrade --check          # check for updates without installing
+vortex version                  # print version
+vortex help                     # show help
+```
+
+<details>
+<summary><strong>All CLI flags</strong></summary>
+
+| Flag | Applies To | Description |
+|------|------------|-------------|
+| `--config` | `run`, `instance quit/kill/show/hide` | Path to a `.vortex` config file |
+| `--cwd` | `run` | Working directory for all jobs (defaults to config file directory) |
+| `--force` | `init`, `docs` | Overwrite existing files |
+| `--port` | `run` | Override the HTTP port |
+| `--headless` | `run` | Run without opening a native window |
+| `--dev` | `run` | Development mode: skip webview, use browser at localhost |
+| `--json` | `instance list` | Output as JSON |
+| `--prune` | `instance list` | Remove stale instances |
+| `--no-open` | `docs` | Generate docs without opening browser |
+
+</details>
+
+<details>
+<summary><strong>Instance management details</strong></summary>
+
+**Restarting**: running `vortex run` with a config that has the same `name` as an already-running instance restarts it in place.
+
+**Ports**: Vortex derives both the handoff port and UI port from the config name, so different named configs run simultaneously without port conflicts.
+
+**`instance list` output** includes:
+- `mode`: `dev`, `headless`, or `windowed`
+- `ui`: `open`, `hidden`, or `none`
+- `started` / `updated` / `last_control` timestamps
+- `generation`: orchestrator restart count
+- `reachable` (in `--json`): whether the instance API responded
+
+**`instance list --prune`**: removes stale registry entries and makes a best-effort attempt to terminate orphaned processes.
+
+**`show` / `hide`**: `show` surfaces the native webview for headless instances. `hide` closes the window without stopping jobs. These only apply to non-`--dev` instances.
+
+</details>
+
+<details>
+<summary><strong>Upgrading details</strong></summary>
+
+`vortex upgrade` downloads the latest GitHub release for your OS/architecture and installs it to:
+
+- macOS/Linux: `~/.local/bin/vortex`
+- Windows: `%LOCALAPPDATA%\Programs\Vortex\vortex.exe`
+
+The upgrade process:
+- Downloads the release binary and verifies its SHA-256 checksum
+- Stops a running instance before replacing the binary
+- On macOS: sets executable permissions and removes the quarantine attribute
+- Attempts to add the install directory to your PATH
+
+After upgrading, open a new terminal session so the updated PATH takes effect.
+
+</details>
 
 ### VS Code Schema
 
-This repository includes a JSON schema at `schemas/vortex.schema.json` and wires it up in `.vscode/settings.json` for:
-
-- `dev.vortex`
-- `mock/*.vortex`
-- `*.vortex`
-
-If you want the same behavior in your own workspace or user settings, add:
+For autocompletion in `.vortex` files, add this to your VS Code settings:
 
 ```json
 {
@@ -164,7 +384,10 @@ If you want the same behavior in your own workspace or user settings, add:
 }
 ```
 
-If you want a stable contract instead of following the latest `master` schema, pin the URL to a release tag:
+<details>
+<summary><strong>Pinning to a specific version</strong></summary>
+
+To avoid breaking changes from schema updates, pin to a release tag:
 
 ```json
 {
@@ -176,230 +399,14 @@ If you want a stable contract instead of following the latest `master` schema, p
 }
 ```
 
-Using `master` is convenient for active development. Using a tag is safer for teams that want reproducible validation behavior over time.
+For SchemaStore submission, a ready-to-submit catalog entry is at `schemas/vortex.schemastore-entry.json`.
 
-For SchemaStore submission, the schema itself also needs a stable public URL and a catalog entry with file matches. This repository now includes a ready-to-submit example catalog record at `schemas/vortex.schemastore-entry.json`.
+</details>
 
-## CLI
+## Building From Source
 
-```
-vortex help
-vortex config list
-vortex config get [key]
-vortex config set <key> <value>
-vortex config unset <key>
-vortex init [path] [--force]
-vortex run [--dev] [--headless] [--port <n>] [--cwd <path>] [--config <path>] [config-file]
-vortex docs [--force] [--no-open]
-vortex --help
-vortex -h
-vortex version
-vortex --version
-vortex -v
-vortex instance list [name] [--json] [--prune]
-vortex instance quit [name] [--config <path>]
-vortex instance kill [name] [--config <path>]
-vortex instance rerun <name> <job-id>
-vortex instance show [name] [--config <path>]
-vortex instance hide [name] [--config <path>]
-vortex upgrade [--check]
-```
-
-Important command-specific flags:
-
-| Flag | Applies To | Description |
-|------|------------|-------------|
-| `--config` | `run`, `instance quit`, `instance kill`, `instance show`, `instance hide` | Resolve the config or target instance from a Vortex config file |
-| `--cwd` | `run` | Working directory for all jobs. Defaults to the directory containing the `.vortex` file |
-| `--force` | `init`, `docs` | Overwrite an existing generated file |
-| `--port` | `run` | Override the deterministic HTTP port for the instance |
-| `--headless` | `run` | Run normally without opening the native webview |
-| `--dev` | `run` | Development mode: skip the native webview and use the browser/Vite workflow |
-| `--json` | `instance list` | Emit machine-readable JSON |
-| `--prune` | `instance list` | Remove stale instance entries while listing |
-| `--no-open` | `docs` | Generate docs without opening a browser |
-
-`name` is mandatory. Unnamed configs fail validation.
-
-Vortex also stores user-level settings in its own config file. The supported keys are `browser` and `editor`.
-
-```sh
-vortex config list
-vortex config set browser "firefox"
-vortex config set editor "code"
-vortex config get browser
-vortex config get editor
-vortex config unset browser
-vortex config unset editor
-```
-
-When an `http` or `https` terminal link is clicked, Vortex resolves the browser in this order:
-
-- `VORTEX_BROWSER`
-- saved `browser` setting from `vortex config set`
-- `BROWSER`
-
-If none of those are set, Vortex falls back to the operating system's default browser opener.
-
-When a terminal file path is clicked, Vortex resolves the editor in this order:
-
-- `VORTEX_EDITOR`
-- saved `editor` setting from `vortex config set`
-- `VISUAL`
-- `EDITOR`
-
-If none of those are set, Vortex falls back to the operating system's default file opener.
-
-When `shell` is omitted, Vortex executes `command` directly by splitting it into argv.
-When `shell` is set, Vortex passes `command` as a script block to that interpreter.
-
-Both `shell` and `command` can also be OS-specific objects. Vortex resolves them for the current runtime OS using these keys:
-
-- `darwin`
-- `linux`
-- `windows`
-- `default`
-
-Example:
-
-```yaml
-jobs:
-  - id: cross-platform-smoke
-    shell:
-      default: bash
-      windows: pwsh
-    command:
-      default: echo hello from vortex
-      windows: Write-Host hello from vortex
-```
-
-By default, Vortex runs every job with the working directory set to the directory containing the `.vortex` file.
-Use `--cwd` to override that for the whole run.
-
-By default, Vortex derives both the handoff port and the HTTP/UI port from the config name, so different named configs can run at the same time without manual port management.
-
-To stop a running instance from the CLI:
-
-```sh
-go run ./cmd/vortex instance quit dev
-```
-
-To terminate all child processes managed by a running instance without shutting down the Vortex controller:
-
-```sh
-go run ./cmd/vortex instance kill dev
-```
-
-To rerun a specific job and any downstream jobs that depend on it, without rerunning unrelated jobs:
-
-```sh
-go run ./cmd/vortex instance rerun dev run-server-a
-```
-
-To open the embedded README documentation in your browser:
-
-```sh
-go run ./cmd/vortex docs
-```
-
-To regenerate the rendered docs or write them without opening a browser:
-
-```sh
-go run ./cmd/vortex docs --force
-go run ./cmd/vortex docs --no-open
-```
-
-To start a config without opening the native window immediately:
-
-```sh
-go run -tags embed_ui ./cmd/vortex run --headless --config mock/dev.vortex
-```
-
-To surface the native webview later for that running instance:
-
-```sh
-go run ./cmd/vortex instance show dev
-```
-
-To close the native webview later without stopping the running instance:
-
-```sh
-go run ./cmd/vortex instance hide dev
-```
-
-`show` is intended for non-`--dev` instances. If an instance was started with `--dev`, there is no native webview to surface later.
-
-`hide` is non-destructive: it closes the native window and removes the app from the Dock/taskbar, while leaving the Vortex instance and its managed jobs running.
-
-Use `--headless` for normal no-window operation. Keep `--dev` for the development workflow where the Vite dev server proxies to Vortex and you work in the browser.
-
-To list running instances and the process IDs they currently manage:
-
-```sh
-go run ./cmd/vortex instance list
-go run ./cmd/vortex instance list dev
-go run ./cmd/vortex instance list --json
-go run ./cmd/vortex instance list --prune
-```
-
-The `instance list` output includes each instance `mode` as one of `dev`, `headless`, or `windowed`, and each live `ui` state as one of `open`, `hidden`, or `none`.
-
-Use `instance list --prune` to explicitly remove stale registry entries for instances that are no longer reachable.
-
-When pruning a stale instance, Vortex also makes a best-effort attempt to terminate the last recorded controller and managed child processes before removing the registry entry.
-
-It also includes:
-- `started`: when the instance was first registered
-- `updated`: the last metadata/lifecycle update, currently refreshed on restart and UI visibility changes
-- `last_control`: the last explicit control action time, currently refreshed on kill, rerun, and UI visibility actions
-- `generation`: the orchestrator restart generation for the running instance
-- `reachable`: in `--json` output, whether the instance API was reachable when queried
-
-To restart an already-running instance, rerun any Vortex config that declares the same `name`:
-
-```sh
-go run ./cmd/vortex run --config mock/dev.vortex
-```
-
-Inline `label:command` mode is no longer supported. Use a Vortex config with a top-level `name` instead.
-
-To upgrade to the latest GitHub release and install it into a managed location:
-
-```sh
-vortex upgrade
-```
-
-To check whether a newer release is available without changing anything:
-
-```sh
-vortex upgrade --check
-```
-
-Managed install locations:
-
-- macOS/Linux: `~/.local/bin/vortex`
-- Windows: `%LOCALAPPDATA%\Programs\Vortex\vortex.exe`
-
-The `upgrade` command will:
-
-- download the latest release asset for your current OS/architecture
-- verify the downloaded binary against the release SHA-256 checksum file
-- stop a running Vortex instance before replacing the installed binary
-- place the binary into the managed install location if it is not already there
-- on macOS, make the installed binary executable and remove the `com.apple.quarantine` attribute
-- attempt to add that install directory to your user PATH automatically
-
-If your shell was updated, open a new terminal session so the new PATH is loaded.
-
-For CI or smoke tests, you can serve the embedded UI without opening a native window:
-
-```sh
-go run -tags embed_ui ./cmd/vortex run --headless
-```
-
-## Building
-
-### Prerequisites
+<details>
+<summary><strong>Prerequisites</strong></summary>
 
 - Go 1.24+
 - Node.js 20+ / pnpm
@@ -407,6 +414,8 @@ go run -tags embed_ui ./cmd/vortex run --headless
   - **Windows:** MSVC or MinGW — WebView2 headers are bundled
   - **macOS:** Xcode command-line tools
   - **Linux:** `libwebkit2gtk-4.1-dev`
+
+</details>
 
 ### Development
 
@@ -416,38 +425,30 @@ go run ./cmd/vortex --dev --config mock/dev.vortex &
 cd cmd/vortex-ui/web && pnpm install && pnpm dev
 ```
 
-The Vite dev server proxies API calls to the Go server. Run vortex with `--dev` to skip the webview and use the browser at `http://localhost:5173`.
+The Vite dev server proxies API calls to the Go backend. Use `--dev` to skip the native window and work in the browser at `http://localhost:5173`.
 
-To test the native window from source, build the frontend and use the embedded-UI tag:
-
-```sh
-cd cmd/vortex-ui/web
-pnpm install
-pnpm build
-
-cd ../../..
-go run -tags embed_ui ./cmd/vortex --config mock/dev.vortex
-```
-
-### Production binary
+### Production Binary
 
 ```sh
 # Build the frontend
-cd cmd/vortex-ui/web
-pnpm install
-pnpm build
+cd cmd/vortex-ui/web && pnpm install && pnpm build && cd ../../..
 
 # Build the Go binary with embedded UI
-go build -tags embed_ui -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
-```
-
-On Windows, `-H=windowsgui` builds a GUI subsystem binary so the launching terminal is freed immediately. Vortex now reattaches to the parent console for console-oriented commands such as `help`, `version`, `config`, `instance`, `docs`, and invalid-command errors, so CLI output still works from a terminal while normal `run` launches remain detached. On macOS/Linux, you can either use `build.go` or omit that flag with plain `go build`:
-
-```sh
 go build -tags embed_ui -o vortex ./cmd/vortex
 ```
 
-If you download the Darwin release binary directly from GitHub, make it executable and remove the quarantine attribute before first launch:
+<details>
+<summary><strong>Windows and macOS notes</strong></summary>
+
+On Windows, add `-ldflags "-H=windowsgui"` to build a GUI binary that doesn't keep a console window open:
+
+```sh
+go build -tags embed_ui -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
+```
+
+CLI commands (`help`, `version`, `config`, etc.) still work from the terminal — Vortex reattaches to the parent console when needed.
+
+If you download the macOS release binary from GitHub, make it executable and remove the quarantine attribute:
 
 ```sh
 chmod +x ./vortex-darwin-arm64
@@ -456,14 +457,19 @@ xattr -d com.apple.quarantine ./vortex-darwin-arm64 2>/dev/null || true
 
 The `embed_ui` build tag embeds the compiled frontend into the binary. Without it, the UI is not served (useful for dev mode).
 
+</details>
+
 ## Architecture
+
+<details>
+<summary><strong>Project structure and data flow</strong></summary>
 
 ```
 cmd/vortex/          CLI entry point, UI embedding
 cmd/vortex-ui/web/   Lit + TypeScript frontend (xterm.js terminals)
 internal/
-  config/            Vortex config loading and validation
-  instance/          Named-instance lock, deterministic port derivation, handoff registry
+  config/            Config loading, validation, runtime code generation
+  instance/          Named-instance lock, port derivation, handoff registry
   orchestrator/      Dependency-aware job graph execution
   terminal/          Process lifecycle, output buffering, ring buffer
   server/            HTTP API, SSE streaming, static file serving
@@ -471,6 +477,8 @@ internal/
 ```
 
 **Data flow:** Orchestrator → Terminal (captures stdout/stderr into ring buffer) → SSE endpoint → xterm.js in the webview.
+
+</details>
 
 ## License
 

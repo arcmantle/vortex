@@ -45,7 +45,9 @@ type JobSpec struct {
 	// Label is the human-readable display name shown in the UI.
 	Label string `yaml:"label"`
 	// Use opts the job into a shared runtime declared at the top-level config.
-	// V1 supports only "node".
+	// Supports "node" (requires shell: node), "bun" (requires shell: bun),
+	// "deno" (requires shell: deno), "csharp" (requires shell: csharp),
+	// and "go" (requires shell: go).
 	Use string `yaml:"use"`
 	// Shell optionally selects an interpreter for command script blocks.
 	// Examples: "bash", "zsh", "pwsh", "cmd", "python", "node".
@@ -163,8 +165,14 @@ func (j JobSpec) CommandLine() (string, []string, error) {
 		return "deno", []string{"eval", script}, nil
 	case "bun":
 		return "bun", []string{"-e", script}, nil
+	case "csharp":
+		// C# requires project generation; actual command is resolved by PrepareJobCommand.
+		return "dotnet", []string{"run"}, nil
+	case "go":
+		// Go requires project generation; actual command is resolved by PrepareJobCommand.
+		return "go", []string{"run", "."}, nil
 	default:
-		return "", nil, fmt.Errorf("unsupported shell %q; supported shells: bash, sh, zsh, fish, cmd, powershell, pwsh, python, python3, node, deno, bun", j.Shell)
+		return "", nil, fmt.Errorf("unsupported shell %q; supported shells: bash, sh, zsh, fish, cmd, powershell, pwsh, python, python3, node, deno, bun, csharp, go", j.Shell)
 	}
 }
 
@@ -229,9 +237,13 @@ func resolveOSValue(node *yaml.Node, field string) (string, error) {
 
 // Config is the top-level structure of a Vortex config file.
 type Config struct {
-	Name string          `yaml:"name"`
-	Node NodeRuntimeSpec `yaml:"node"`
-	Jobs []JobSpec       `yaml:"jobs"`
+	Name   string            `yaml:"name"`
+	Node   NodeRuntimeSpec   `yaml:"node"`
+	Bun    BunRuntimeSpec    `yaml:"bun"`
+	Deno   DenoRuntimeSpec   `yaml:"deno"`
+	CSharp CSharpRuntimeSpec `yaml:"csharp"`
+	Go     GoRuntimeSpec     `yaml:"go"`
+	Jobs   []JobSpec         `yaml:"jobs"`
 	// WorkingDir is the runtime working directory used for job execution.
 	// It is derived from CLI flags and the config path, not from YAML.
 	WorkingDir string `yaml:"-"`
@@ -254,6 +266,18 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config defines no jobs")
 	}
 	if err := cfg.validateNodeRuntime(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateBunRuntime(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateDenoRuntime(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateCSharpRuntime(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateGoRuntime(); err != nil {
 		return nil, err
 	}
 	// Validate: all IDs non-empty and unique.

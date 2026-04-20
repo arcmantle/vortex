@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"arcmantle/vortex/internal/config"
+	"arcmantle/vortex/internal/favorites"
 	"arcmantle/vortex/internal/instance"
 	"arcmantle/vortex/internal/orchestrator"
 	"arcmantle/vortex/internal/server"
@@ -307,12 +308,21 @@ func loadConfigFile(configPath string, args []string) (*config.Config, string, e
 		if len(args) > 1 {
 			return nil, "", fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
 		}
-		if !isSupportedConfigPath(args[0]) {
-			return nil, "", fmt.Errorf("inline mode is no longer supported; provide a Vortex config with a top-level name")
+		// Resolve @alias favorites before checking config path format.
+		if favorites.IsFavoriteRef(args[0]) {
+			resolved, err := favorites.Resolve(favorites.ParseFavoriteRef(args[0]))
+			if err != nil {
+				return nil, "", fmt.Errorf("favorite: %w", err)
+			}
+			configPath = resolved
+		} else {
+			if !isSupportedConfigPath(args[0]) {
+				return nil, "", fmt.Errorf("inline mode is no longer supported; provide a Vortex config with a top-level name")
+			}
+			configPath = args[0]
 		}
-		configPath = args[0]
 	}
-	if len(args) > 0 && configPath != args[0] {
+	if len(args) > 0 && configPath != args[0] && !favorites.IsFavoriteRef(args[0]) {
 		return nil, "", fmt.Errorf("unexpected positional args: %s", strings.Join(args, " "))
 	}
 	resolvedConfigPath, err := resolveConfigPath(configPath)
