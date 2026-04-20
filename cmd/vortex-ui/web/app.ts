@@ -28,14 +28,19 @@ export class VortexApp extends LitElement {
       border-bottom: 1px solid #3c3c3c;
     }
 
-    /* Group tab bar — only visible when there are multiple groups */
+    /* Group tab bar — always visible (holds config toggle) */
     .group-bar {
       display: grid;
-      grid-auto-flow: column;
-      grid-auto-columns: max-content;
+      grid-template-columns: 1fr auto;
       background: #1e1e1e;
       border-bottom: 1px solid #2d2d2d;
       overflow-x: auto;
+    }
+
+    .group-bar .groups {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: max-content;
     }
 
     .group-bar button {
@@ -57,6 +62,31 @@ export class VortexApp extends LitElement {
     .group-bar button:hover:not(.active) {
       background: #2a2a2a;
       color: #bbb;
+    }
+
+    .config-toggle {
+      display: grid;
+      place-items: center;
+      padding: 0 10px;
+      background: transparent;
+      border: none;
+      border-left: 1px solid #2d2d2d;
+      color: #888;
+      cursor: pointer;
+      transition: color 0.15s, background 0.15s;
+    }
+    .config-toggle:hover {
+      color: #ccc;
+      background: #2a2a2a;
+    }
+    .config-toggle.active {
+      color: #0078d4;
+    }
+    .config-toggle svg {
+      width: 14px;
+      height: 14px;
+      fill: none;
+      stroke: currentColor;
     }
 
     /* Process tab bar */
@@ -157,12 +187,21 @@ export class VortexApp extends LitElement {
       place-items: center;
       color: #555;
     }
+
+    vortex-config-preview {
+      position: absolute;
+      inset: 0;
+      z-index: 20;
+    }
   `;
 
   @state() private _terminals: TerminalInfo[] = [];
   @state() private _activeId = '';
   @state() private _activeGroup = '';
   @state() private _instanceName = 'Vortex';
+  @state() private _showConfigPreview = false;
+  @state() private _configContent = '';
+  @state() private _configPath = '';
   private _gen = -1;
   private _groupInitialized = false;
   private _fetchSeq = 0;
@@ -287,6 +326,39 @@ export class VortexApp extends LitElement {
     void term?.clearOutput();
   }
 
+  private async _openConfigFile(): Promise<void> {
+    if (this._showConfigPreview) {
+      this._showConfigPreview = false;
+      return;
+    }
+    try {
+      const [res] = await Promise.all([
+        fetch(`${API_BASE}/api/config-file`, { headers: this._authHeaders() }),
+        import('./components/vortex-config-preview.js'),
+      ]);
+      if (!res.ok) return;
+      const body = (await res.json()) as { path: string; content: string };
+      this._configPath = body.path || '';
+      this._configContent = body.content || '';
+      this._showConfigPreview = true;
+    } catch {
+      // ignore
+    }
+  }
+
+  private async _openConfigInEditor(): Promise<void> {
+    if (!this._configPath) return;
+    try {
+      await fetch(`${API_BASE}/api/open-path`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
+        body: JSON.stringify({ path: this._configPath }),
+      });
+    } catch {
+      // ignore
+    }
+  }
+
   private _rerunActiveTerminal(): void {
     if (!this._activeId) return;
     void this._rerunTab(this._activeId);
@@ -309,35 +381,50 @@ export class VortexApp extends LitElement {
 
     return html`
       <div class="header">
-        ${this._showGroupBar
+        <div class="group-bar">
+          <div class="groups">
+            ${!this._showConfigPreview && this._showGroupBar
+              ? this._groups.map(
+                  (g) => html`
+                    <button
+                      class=${g === this._activeGroup ? 'active' : ''}
+                      @click=${() => this._selectGroup(g)}
+                    >${g || '(default)'}</button>
+                  `
+                )
+              : ''}
+          </div>
+          <button class="config-toggle ${this._showConfigPreview ? 'active' : ''}" @click=${() => this._openConfigFile()} title="Toggle config file preview"><svg viewBox="0 0 16 16" stroke-width="1.2" stroke-linejoin="round"><path d="M2 4.5V13a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5H3A1 1 0 0 0 2 4.5z"/></svg></button>
+        </div>
+        ${!this._showConfigPreview
           ? html`
-            <div class="group-bar">
-              ${this._groups.map(
-                (g) => html`
+            <div class="tab-bar">
+              ${visibleTerminals.map(
+                (t) => html`
                   <button
-                    class=${g === this._activeGroup ? 'active' : ''}
-                    @click=${() => this._selectGroup(g)}
-                  >${g || '(default)'}</button>
+                    class=${t.id === this._activeId ? 'active' : ''}
+                    @click=${() => this._selectTab(t.id)}
+                  >
+                    <span class="status-dot ${t.status}"></span>
+                    ${t.label}
+                  </button>
                 `
               )}
             </div>
           `
           : ''}
-        <div class="tab-bar">
-          ${visibleTerminals.map(
-            (t) => html`
-              <button
-                class=${t.id === this._activeId ? 'active' : ''}
-                @click=${() => this._selectTab(t.id)}
-              >
-                <span class="status-dot ${t.status}"></span>
-                ${t.label}
-              </button>
-            `
-          )}
-        </div>
       </div>
       <div class="panel">
+        ${this._showConfigPreview
+          ? html`
+            <vortex-config-preview
+              .path=${this._configPath}
+              .content=${this._configContent}
+              @close=${() => { this._showConfigPreview = false; }}
+              @open-in-editor=${() => this._openConfigInEditor()}
+            ></vortex-config-preview>
+          `
+          : ''}
         ${active
           ? html`
             <div class="panel-toolbar">

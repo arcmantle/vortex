@@ -46,6 +46,7 @@ type Server struct {
 	devServerProxy string // e.g. "http://localhost:5173"
 	instance       InstanceInfo
 	token          string // session token for API authentication
+	configPath     string // absolute path to the running .vortex config file
 }
 
 // New creates a Server.
@@ -54,7 +55,8 @@ type Server struct {
 //   - devMode: when true, /api/* is served but static files are not embedded
 //   - devServerURL: Vite dev server URL to proxy static requests to (unused when devMode==false)
 //   - token: session token for API auth (empty string disables auth)
-func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, devMode bool, devServerURL string, instance InstanceInfo, token string) *Server {
+//   - configPath: absolute path to the running .vortex config file
+func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, devMode bool, devServerURL string, instance InstanceInfo, token string, configPath string) *Server {
 	return &Server{
 		appCtx:         appCtx,
 		orch:           orch,
@@ -63,6 +65,7 @@ func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, 
 		devServerProxy: devServerURL,
 		instance:       instance,
 		token:          token,
+		configPath:     configPath,
 	}
 }
 
@@ -80,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/terminals/{id}/size", s.handleResizeTerminal)
 	mux.HandleFunc("DELETE /api/terminals/{id}/buffer", s.handleClearBuffer)
 	mux.HandleFunc("POST /api/open-path", s.handleOpenPath)
+	mux.HandleFunc("GET /api/config-file", s.handleGetConfigFile)
 
 	if !s.devMode {
 		// Serve the embedded SPA with fallback to index.html.
@@ -481,6 +485,20 @@ func (s *Server) handleClearBuffer(w http.ResponseWriter, r *http.Request) {
 		term.ClearBuffer()
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetConfigFile(w http.ResponseWriter, r *http.Request) {
+	content := ""
+	if s.configPath != "" {
+		data, err := os.ReadFile(s.configPath)
+		if err == nil {
+			content = string(data)
+		}
+	}
+	writeJSON(w, struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}{Path: s.configPath, Content: content})
 }
 
 func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {

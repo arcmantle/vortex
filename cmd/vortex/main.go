@@ -189,7 +189,7 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 		return fmt.Errorf("non-dev mode requires embedded UI assets; run pnpm build in cmd/vortex-ui/web and start with go run -tags embed_ui ./cmd/vortex ..., or use --dev")
 	}
 
-	srv := server.New(ctx, orch, static, opts.dev, "http://localhost:5173", server.InstanceInfo{Name: identity.DisplayName, RegistryName: identity.Name, HTTPPort: httpPort}, sessionToken)
+	srv := server.New(ctx, orch, static, opts.dev, "http://localhost:5173", server.InstanceInfo{Name: identity.DisplayName, RegistryName: identity.Name, HTTPPort: httpPort}, sessionToken, configPath)
 	addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	windowTitle := fmt.Sprintf("Vortex - %s", identity.DisplayName)
 	windowURL := fmt.Sprintf("http://%s?token=%s", addr, sessionToken)

@@ -1,0 +1,65 @@
+{
+	"name": "vortex-lang",
+	"displayName": "Vortex Language Support",
+	"description": "Syntax highlighting for embedded code in .vortex config files",
+	"version": "0.3.0",
+	"publisher": "arcmantle",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/arcmantle/vortex"
+	},
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"categories": [
+		"Programming Languages"
+	],
+	"activationEvents": [
+		"onLanguage:yaml",
+		"workspaceContains:**/*.vortex"
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"languages": [
+			{
+				"id": "vortex",
+				"aliases": [
+					"Vortex",
+					"vortex"
+				],
+				"extensions": [
+					".vortex"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "vortex",
+				"scopeName": "source.vortex",
+				"path": "./syntaxes/vortex.tmLanguage.json"
+			}
+		],
+		"yamlValidation": [
+			{
+				"fileMatch": "*.vortex",
+				"url": "https://raw.githubusercontent.com/arcmantle/vortex/master/schemas/vortex.schema.json"
+			}
+		]
+	},
+	"scripts": {
+		"build": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+		"watch": "pnpm build --watch",
+		"package": "vsce package --no-dependencies"
+	},
+	"devDependencies": {
+		"@types/node": "^20.0.0",
+		"@types/vscode": "^1.85.0",
+		"esbuild": "^0.24.0",
+		"typescript": "^5.5.0"
+	},
+	"dependencies": {
+		"shiki": "^1.29.2",
+		"yaml": "^2.7.0"
+	}
+}

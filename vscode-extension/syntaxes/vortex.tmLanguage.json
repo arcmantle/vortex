@@ -1,0 +1,93 @@
+{
+	"scopeName": "source.vortex",
+	"name": "Vortex",
+	"fileTypes": [
+		"vortex"
+	],
+	"patterns": [
+		{
+			"include": "#comment"
+		},
+		{
+			"include": "#directive"
+		},
+		{
+			"include": "#key"
+		},
+		{
+			"include": "#string-double"
+		},
+		{
+			"include": "#string-single"
+		},
+		{
+			"include": "#constant"
+		},
+		{
+			"include": "#number"
+		},
+		{
+			"include": "#block-scalar-indicator"
+		}
+	],
+	"repository": {
+		"comment": {
+			"match": "(?:^|\\s)#.*$",
+			"name": "comment.line.number-sign.vortex"
+		},
+		"directive": {
+			"match": "^#\\s*yaml-language-server.*$",
+			"name": "comment.line.directive.vortex"
+		},
+		"key": {
+			"match": "(?:^|(?<=\\s))([\\w][\\w.-]*)\\s*(?=:)",
+			"captures": {
+				"1": {
+					"name": "entity.name.tag.yaml.vortex"
+				}
+			}
+		},
+		"string-double": {
+			"begin": "\"",
+			"end": "\"",
+			"name": "string.quoted.double.vortex",
+			"patterns": [
+				{
+					"match": "\\\\.",
+					"name": "constant.character.escape.vortex"
+				}
+			]
+		},
+		"string-single": {
+			"begin": "'",
+			"end": "'",
+			"name": "string.quoted.single.vortex",
+			"patterns": [
+				{
+					"match": "''",
+					"name": "constant.character.escape.vortex"
+				}
+			]
+		},
+		"constant": {
+			"match": "(?:^|(?<=:\\s))\\s*(true|false|null|yes|no)\\s*$",
+			"captures": {
+				"1": {
+					"name": "constant.language.vortex"
+				}
+			}
+		},
+		"number": {
+			"match": "(?:^|(?<=:\\s))\\s*(-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?)\\s*$",
+			"captures": {
+				"1": {
+					"name": "constant.numeric.vortex"
+				}
+			}
+		},
+		"block-scalar-indicator": {
+			"match": "[|>][+-]?\\s*$",
+			"name": "keyword.control.flow.block-scalar.vortex"
+		}
+	}
+}
