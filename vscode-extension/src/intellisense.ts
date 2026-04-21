@@ -2,11 +2,21 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { assembleSource, type AssembledSource, type SourceMapEntry } from './assembler';
+import { assembleJsSource, assembleGoSource, assembleCSharpSource, type AssembledSource } from './assembler';
+import { TypeScriptClient } from './typescript-client';
+import { GoplsClient, lspCompletionToVscode, lspHoverToVscode, lspSignatureHelpToVscode } from './gopls-client';
+import { RoslynClient, roslynCompletionToVscode, roslynHoverToVscode, roslynSignatureHelpToVscode } from './roslyn-client';
+import { log } from './log';
 
 /**
- * Manages the virtual JS document and provides intellisense for embedded
- * JavaScript in .vortex files by proxying to VS Code's TypeScript service.
+ * Provides intellisense for embedded code in .vortex files.
+ *
+ * JS/TS: TypeScriptClient — in-process TypeScript language service (lazy-init).
+ * Go:    GoplsClient — gopls subprocess via JSON-RPC over stdio (lazy-init).
+ * C#:    RoslynClient — Roslyn subprocess via JSON-RPC over stdio (lazy-init).
+ *
+ * The language is detected from the assembled source, and each provider
+ * routes to the correct backend.
  */
 export class VortexIntellisenseProvider implements
   vscode.HoverProvider,
@@ -16,110 +26,206 @@ export class VortexIntellisenseProvider implements
   vscode.DocumentHighlightProvider,
   vscode.Disposable
 {
-  private tempDir: string;
-  private tempFiles = new Map<string, { filePath: string; assembled: AssembledSource }>();
-  private disposables: vscode.Disposable[] = [];
+  // --- JS/TS backend (lazy) ---
+  private tsClient: TypeScriptClient | null = null;
 
-  constructor() {
-    this.tempDir = path.join(os.tmpdir(), 'vortex-intellisense');
-    fs.mkdirSync(this.tempDir, { recursive: true });
+  // --- Go backend (lazy) ---
+  private goplsClient: GoplsClient | null = null;
+  private goplsStartPromise: Promise<boolean> | null = null;
 
-    // Write a jsconfig.json so TS service picks up the files
-    const jsconfig = {
-      compilerOptions: {
-        target: 'ES2022',
-        module: 'ES2022',
-        moduleResolution: 'node',
-        allowJs: true,
-        checkJs: false,
-        strict: false,
-        noEmit: true,
-      },
-      include: ['*.js'],
-    };
-    fs.writeFileSync(
-      path.join(this.tempDir, 'jsconfig.json'),
-      JSON.stringify(jsconfig, null, 2)
-    );
+  // --- C# backend (lazy) ---
+  private roslynClient: RoslynClient | null = null;
+  private roslynStartPromise: Promise<boolean> | null = null;
+
+  // Cached assembled source per .vortex document URI.
+  private assembledCache = new Map<string, { assembled: AssembledSource; fileName: string }>();
+
+  // For "View Assembled Source" on-demand temp files.
+  private tempDir = path.join(os.tmpdir(), 'vortex-intellisense');
+
+  constructor() {}
+
+  // --- Lazy initialization ---
+
+  private ensureTypeScriptReady(): boolean {
+    if (!this.tsClient) {
+      this.tsClient = new TypeScriptClient();
+    }
+    return this.tsClient.start();
   }
 
   /**
-   * Ensure the assembled source file is up-to-date for the given .vortex document.
-   * Returns the assembled source info, or null if assembly failed.
+   * Assemble the .vortex document's embedded code. Pure assembly + caching,
+   * does NOT start any language servers.
    */
-  private ensureAssembled(document: vscode.TextDocument): { filePath: string; assembled: AssembledSource } | null {
+  private ensureAssembled(document: vscode.TextDocument): { assembled: AssembledSource; fileName: string } | null {
     const key = document.uri.toString();
-    const existing = this.tempFiles.get(key);
+    const text = document.getText();
 
-    const assembled = assembleSource(document.getText());
+    // Try C# first, then Go, then JS
+    const assembled = assembleCSharpSource(text) ?? assembleGoSource(text) ?? assembleJsSource(text);
     if (!assembled) return null;
 
-    // Use a stable filename derived from the vortex file
     const baseName = path.basename(document.uri.fsPath, '.vortex');
     const safeName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const filePath = path.join(this.tempDir, `${safeName}.js`);
+    const extMap: Record<string, string> = { go: '.go', csharp: '.cs', javascript: '.js' };
+    const ext = extMap[assembled.languageId] || '.js';
+    const fileName = path.join(path.dirname(document.uri.fsPath), `.${safeName}.vortex-assembled${ext}`);
 
-    // Only rewrite if content changed
-    if (!existing || existing.assembled.text !== assembled.text) {
-      fs.writeFileSync(filePath, assembled.text);
-      this.tempFiles.set(key, { filePath, assembled });
+    const existing = this.assembledCache.get(key);
+    if (existing && existing.assembled.text === assembled.text) {
+      return existing;
     }
 
-    return this.tempFiles.get(key)!;
+    // Update cache
+    this.assembledCache.set(key, { assembled, fileName });
+
+    // For JS: update TS client's virtual file system
+    if (assembled.languageId === 'javascript' && this.tsClient) {
+      this.tsClient.updateSource(fileName, assembled.text);
+    }
+
+    return this.assembledCache.get(key)!;
   }
 
   /**
-   * Map a position in the .vortex file to the corresponding position
-   * in the assembled JS source. Returns null if position isn't in an embedded region.
+   * Ensure gopls is started and has the latest Go source.
+   * Returns true if gopls is ready. Safe to call repeatedly.
    */
+  private async ensureGoplsReady(document: vscode.TextDocument): Promise<boolean> {
+    // Lazy-create the client
+    if (!this.goplsClient) {
+      this.goplsClient = new GoplsClient();
+    }
+
+    // Start gopls (deduplicated — won't restart if already running)
+    if (!this.goplsStartPromise) {
+      this.goplsStartPromise = this.goplsClient.start();
+      this.goplsStartPromise.then(ok => {
+        if (ok) {
+          log('[go] gopls started');
+        } else {
+          log('[go] gopls not available — Go intellisense disabled');
+        }
+      });
+    }
+
+    const ok = await this.goplsStartPromise;
+    if (!ok || !this.goplsClient.isReady) return false;
+
+    // Update source
+    const text = document.getText();
+    const assembled = assembleGoSource(text);
+    if (!assembled) return false;
+
+    // Extract imports for go.mod
+    const { parseDocument, isMap, isSeq, isScalar } = require('yaml');
+    let goImports: Array<{ path: string; version: string }> = [];
+    try {
+      const doc = parseDocument(text, { keepSourceTokens: true });
+      const root = doc.contents;
+      if (isMap(root)) {
+        const goNode = root.get('go', true);
+        if (isMap(goNode)) {
+          const importsNode = goNode.get('imports', true);
+          if (isSeq(importsNode)) {
+            for (const item of importsNode.items) {
+              if (!isMap(item)) continue;
+              const p = item.get('path', true);
+              const v = item.get('version', true);
+              if (isScalar(p) && isScalar(v)) {
+                goImports.push({ path: String(p.value), version: String(v.value) });
+              }
+            }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+
+    await this.goplsClient.updateSource(assembled, goImports);
+    return true;
+  }
+
+  /**
+   * Ensure Roslyn is started and has the latest C# source.
+   * Returns true if Roslyn is ready. Safe to call repeatedly.
+   */
+  private async ensureRoslynReady(document: vscode.TextDocument): Promise<boolean> {
+    if (!this.roslynClient) {
+      this.roslynClient = new RoslynClient();
+    }
+
+    if (!this.roslynStartPromise) {
+      this.roslynStartPromise = this.roslynClient.start();
+      this.roslynStartPromise.then(ok => {
+        if (ok) {
+          log('[csharp] Roslyn started');
+        } else {
+          log('[csharp] Roslyn not available — C# intellisense disabled');
+        }
+      });
+    }
+
+    const ok = await this.roslynStartPromise;
+    if (!ok || !this.roslynClient.isReady) return false;
+
+    // Update source
+    const text = document.getText();
+    const assembled = assembleCSharpSource(text);
+    if (!assembled) return false;
+
+    // Extract framework and packages from the vortex config
+    const { parseDocument, isMap, isSeq, isScalar } = require('yaml');
+    let framework = 'net8.0';
+    let packages: Array<{ name: string; version: string }> = [];
+    try {
+      const doc = parseDocument(text, { keepSourceTokens: true });
+      const root = doc.contents;
+      if (isMap(root)) {
+        const csNode = root.get('csharp', true);
+        if (isMap(csNode)) {
+          const fw = csNode.get('framework', true);
+          if (isScalar(fw) && typeof fw.value === 'string') {
+            framework = fw.value;
+          }
+          const pkgsNode = csNode.get('packages', true);
+          if (isSeq(pkgsNode)) {
+            for (const item of pkgsNode.items) {
+              if (!isMap(item)) continue;
+              const n = item.get('name', true);
+              const v = item.get('version', true);
+              if (isScalar(n) && isScalar(v)) {
+                packages.push({ name: String(n.value), version: String(v.value) });
+              }
+            }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+
+    await this.roslynClient.updateSource(assembled, framework, packages);
+    return true;
+  }
+
+  // --- Position mapping helpers ---
+
   private mapToAssembled(
-    document: vscode.TextDocument,
     position: vscode.Position,
     assembled: AssembledSource
   ): vscode.Position | null {
-    const vortexLine = position.line;
-    const vortexCol = position.character;
-
-    // Find the assembled line that maps from this vortex line
-    for (let i = 0; i < assembled.sourceMap.length; i++) {
-      const entry = assembled.sourceMap[i];
-      if (entry.vortexLine === vortexLine && entry.kind !== 'synthetic') {
-        // The column in the assembled source = vortex col - indent offset
-        const assembledCol = Math.max(0, vortexCol - entry.col);
-        return new vscode.Position(i, assembledCol);
-      }
-    }
-
-    return null;
+    const result = assembled.sourceMap.toAssembled(position.line, position.character);
+    if (!result) return null;
+    return new vscode.Position(result.line, result.col);
   }
 
-  /**
-   * Map a position in the assembled JS source back to the .vortex file.
-   */
   private mapFromAssembled(
     assembledLine: number,
     assembledCol: number,
     assembled: AssembledSource
   ): vscode.Position | null {
-    if (assembledLine < 0 || assembledLine >= assembled.sourceMap.length) return null;
-    const entry = assembled.sourceMap[assembledLine];
-    if (entry.vortexLine < 0) return null;
-
-    const vortexCol = assembledCol + entry.col;
-    return new vscode.Position(entry.vortexLine, vortexCol);
-  }
-
-  /**
-   * Map a Range from the assembled source back to the .vortex file.
-   */
-  private mapRangeFromAssembled(
-    range: vscode.Range,
-    assembled: AssembledSource
-  ): vscode.Range | null {
-    const start = this.mapFromAssembled(range.start.line, range.start.character, assembled);
-    const end = this.mapFromAssembled(range.end.line, range.end.character, assembled);
-    if (!start || !end) return null;
-    return new vscode.Range(start, end);
+    const result = assembled.sourceMap.toVortex(assembledLine, assembledCol);
+    if (!result) return null;
+    return new vscode.Position(result.line, result.col);
   }
 
   // --- Hover ---
@@ -132,21 +238,29 @@ export class VortexIntellisenseProvider implements
     const info = this.ensureAssembled(document);
     if (!info) return null;
 
-    const mappedPos = this.mapToAssembled(document, position, info.assembled);
+    const mappedPos = this.mapToAssembled(position, info.assembled);
     if (!mappedPos) return null;
 
-    const uri = vscode.Uri.file(info.filePath);
-    const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
-      'vscode.executeHoverProvider',
-      uri,
-      mappedPos
-    );
+    if (info.assembled.languageId === 'go') {
+      const ready = await this.ensureGoplsReady(document);
+      if (!ready) return null;
+      const hover = await this.goplsClient!.getHover(mappedPos.line, mappedPos.character);
+      if (!hover) return null;
+      return lspHoverToVscode(hover);
+    }
 
-    if (!hovers || hovers.length === 0) return null;
+    if (info.assembled.languageId === 'csharp') {
+      const ready = await this.ensureRoslynReady(document);
+      if (!ready) return null;
+      const hover = await this.roslynClient!.getHover(mappedPos.line, mappedPos.character);
+      if (!hover) return null;
+      return roslynHoverToVscode(hover);
+    }
 
-    // Return the hover content at the original position
-    const hover = hovers[0];
-    return new vscode.Hover(hover.contents, undefined);
+    // JS path — lazy-init TS
+    if (!this.ensureTypeScriptReady()) return null;
+
+    return this.tsClient!.getHover(info.fileName, info.assembled, mappedPos.line, mappedPos.character);
   }
 
   // --- Completions ---
@@ -160,19 +274,53 @@ export class VortexIntellisenseProvider implements
     const info = this.ensureAssembled(document);
     if (!info) return null;
 
-    const mappedPos = this.mapToAssembled(document, position, info.assembled);
+    const mappedPos = this.mapToAssembled(position, info.assembled);
     if (!mappedPos) return null;
 
-    const uri = vscode.Uri.file(info.filePath);
-    const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
-      'vscode.executeCompletionItemProvider',
-      uri,
-      mappedPos
-    );
+    const lang = info.assembled.languageId;
+    const wordRange = this.getWordRangeAtCursor(document, position);
 
-    if (!completions || completions.items.length === 0) return null;
+    if (lang === 'go') {
+      const ready = await this.ensureGoplsReady(document);
+      if (!ready) {
+        log(`[go] completions: gopls not available`);
+        return null;
+      }
+      log(`[go] completions: vortex(${position.line},${position.character}) -> assembled(${mappedPos.line},${mappedPos.character})`);
+      const items = await this.goplsClient!.getCompletions(mappedPos.line, mappedPos.character);
+      log(`[go] completions: ${items.length} items`);
+      return items.map(item => lspCompletionToVscode(item, wordRange));
+    }
 
-    return completions.items;
+    if (lang === 'csharp') {
+      const ready = await this.ensureRoslynReady(document);
+      if (!ready) {
+        log(`[csharp] completions: Roslyn not available`);
+        return null;
+      }
+      log(`[csharp] completions: vortex(${position.line},${position.character}) -> assembled(${mappedPos.line},${mappedPos.character})`);
+      const items = await this.roslynClient!.getCompletions(mappedPos.line, mappedPos.character);
+      log(`[csharp] completions: ${items.length} items`);
+      return items.map(item => roslynCompletionToVscode(item, wordRange));
+    }
+
+    // JS path — lazy-init TS
+    if (!this.ensureTypeScriptReady()) {
+      log(`[js] completions: TypeScript not available`);
+      return null;
+    }
+
+    log(`[js] completions: vortex(${position.line},${position.character}) -> assembled(${mappedPos.line},${mappedPos.character})`);
+    return this.tsClient!.getCompletions(info.fileName, info.assembled, mappedPos.line, mappedPos.character, wordRange);
+  }
+
+  private getWordRangeAtCursor(document: vscode.TextDocument, position: vscode.Position): vscode.Range {
+    const line = document.lineAt(position.line).text;
+    let start = position.character;
+    while (start > 0 && /[a-zA-Z0-9_$]/.test(line[start - 1])) {
+      start--;
+    }
+    return new vscode.Range(position.line, start, position.line, position.character);
   }
 
   // --- Definition ---
@@ -185,36 +333,94 @@ export class VortexIntellisenseProvider implements
     const info = this.ensureAssembled(document);
     if (!info) return null;
 
-    const mappedPos = this.mapToAssembled(document, position, info.assembled);
+    const mappedPos = this.mapToAssembled(position, info.assembled);
     if (!mappedPos) return null;
 
-    const uri = vscode.Uri.file(info.filePath);
-    const definitions = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
-      'vscode.executeDefinitionProvider',
-      uri,
-      mappedPos
-    );
+    if (info.assembled.languageId === 'go') {
+      const ready = await this.ensureGoplsReady(document);
+      if (!ready) return null;
+      const defs = await this.goplsClient!.getDefinition(mappedPos.line, mappedPos.character);
+      if (!defs || defs.length === 0) return null;
 
-    if (!definitions || definitions.length === 0) return null;
+      const results: vscode.Location[] = [];
+      for (const def of defs) {
+        const defUri = def.uri.startsWith('file://') ? def.uri : `file://${def.uri}`;
+        const defPath = vscode.Uri.parse(defUri).fsPath;
 
-    // Map definitions back: if they point into our temp file, remap to .vortex
-    const results: vscode.Location[] = [];
-    for (const def of definitions) {
-      const loc = 'targetUri' in def
-        ? new vscode.Location(def.targetUri, def.targetRange)
-        : def;
-
-      if (loc.uri.fsPath === info.filePath) {
-        // Remap to the vortex file
-        const mappedRange = this.mapRangeFromAssembled(loc.range, info.assembled);
-        if (mappedRange) {
-          results.push(new vscode.Location(document.uri, mappedRange));
+        // If definition is in our assembled file, remap to .vortex
+        if (defPath === this.goplsClient!['mainFilePath']) {
+          const startVortex = this.mapFromAssembled(
+            def.range.start.line, def.range.start.character, info.assembled
+          );
+          const endVortex = this.mapFromAssembled(
+            def.range.end.line, def.range.end.character, info.assembled
+          );
+          if (startVortex && endVortex) {
+            results.push(new vscode.Location(document.uri, new vscode.Range(startVortex, endVortex)));
+          }
+        } else {
+          // External definition (Go stdlib, etc.)
+          results.push(new vscode.Location(
+            vscode.Uri.file(defPath),
+            new vscode.Range(
+              def.range.start.line, def.range.start.character,
+              def.range.end.line, def.range.end.character,
+            )
+          ));
         }
-      } else {
-        // External definition (e.g., node_modules) — keep as-is
-        results.push(loc);
+      }
+      return results.length > 0 ? results : null;
+    }
+
+    if (info.assembled.languageId === 'csharp') {
+      const ready = await this.ensureRoslynReady(document);
+      if (!ready) return null;
+      const defs = await this.roslynClient!.getDefinition(mappedPos.line, mappedPos.character);
+      if (!defs || defs.length === 0) return null;
+
+      const results: vscode.Location[] = [];
+      for (const def of defs) {
+        const defUri = def.uri.startsWith('file://') ? def.uri : `file://${def.uri}`;
+        const defPath = vscode.Uri.parse(defUri).fsPath;
+
+        if (defPath === this.roslynClient!['programFilePath']) {
+          const startVortex = this.mapFromAssembled(
+            def.range.start.line, def.range.start.character, info.assembled
+          );
+          const endVortex = this.mapFromAssembled(
+            def.range.end.line, def.range.end.character, info.assembled
+          );
+          if (startVortex && endVortex) {
+            results.push(new vscode.Location(document.uri, new vscode.Range(startVortex, endVortex)));
+          }
+        } else {
+          results.push(new vscode.Location(
+            vscode.Uri.file(defPath),
+            new vscode.Range(
+              def.range.start.line, def.range.start.character,
+              def.range.end.line, def.range.end.character,
+            )
+          ));
+        }
+      }
+      return results.length > 0 ? results : null;
+    }
+
+    // JS path — lazy-init TS
+    if (!this.ensureTypeScriptReady()) return null;
+
+    const defs = this.tsClient!.getDefinition(info.fileName, info.assembled, mappedPos.line, mappedPos.character);
+    if (!defs) return null;
+
+    const results: vscode.Location[] = [];
+    for (const def of defs.internal) {
+      const startVortex = this.mapFromAssembled(def.startLine, def.startCol, info.assembled);
+      const endVortex = this.mapFromAssembled(def.endLine, def.endCol, info.assembled);
+      if (startVortex && endVortex) {
+        results.push(new vscode.Location(document.uri, new vscode.Range(startVortex, endVortex)));
       }
     }
+    results.push(...defs.external);
 
     return results.length > 0 ? results : null;
   }
@@ -230,51 +436,70 @@ export class VortexIntellisenseProvider implements
     const info = this.ensureAssembled(document);
     if (!info) return null;
 
-    const mappedPos = this.mapToAssembled(document, position, info.assembled);
+    const mappedPos = this.mapToAssembled(position, info.assembled);
     if (!mappedPos) return null;
 
-    const uri = vscode.Uri.file(info.filePath);
-    const help = await vscode.commands.executeCommand<vscode.SignatureHelp>(
-      'vscode.executeSignatureHelpProvider',
-      uri,
-      mappedPos
-    );
+    if (info.assembled.languageId === 'go') {
+      const ready = await this.ensureGoplsReady(document);
+      if (!ready) return null;
+      const sigHelp = await this.goplsClient!.getSignatureHelp(mappedPos.line, mappedPos.character);
+      if (!sigHelp) return null;
+      return lspSignatureHelpToVscode(sigHelp);
+    }
 
-    return help || null;
+    if (info.assembled.languageId === 'csharp') {
+      const ready = await this.ensureRoslynReady(document);
+      if (!ready) return null;
+      const sigHelp = await this.roslynClient!.getSignatureHelp(mappedPos.line, mappedPos.character);
+      if (!sigHelp) return null;
+      return roslynSignatureHelpToVscode(sigHelp);
+    }
+
+    // JS path — lazy-init TS
+    if (!this.ensureTypeScriptReady()) return null;
+
+    return this.tsClient!.getSignatureHelp(info.fileName, info.assembled, mappedPos.line, mappedPos.character);
   }
 
-  // --- Document Highlights (suppress YAML extension's blue block highlight) ---
+  // --- Document Highlights (suppress blue block highlight) ---
 
   provideDocumentHighlights(
-    document: vscode.TextDocument,
-    position: vscode.Position,
+    _document: vscode.TextDocument,
+    _position: vscode.Position,
     _token: vscode.CancellationToken
-  ): vscode.DocumentHighlight[] | null {
-    const info = this.ensureAssembled(document);
-    if (!info) return null;
-
-    // If the cursor is inside an embedded code region, return empty array
-    // to suppress other providers from highlighting the whole block scalar
-    const mappedPos = this.mapToAssembled(document, position, info.assembled);
-    if (mappedPos) {
-      return [];
-    }
-    return null;
+  ): vscode.DocumentHighlight[] {
+    return [];
   }
 
-  // --- Cleanup ---
+  // --- Public methods ---
 
-  dispose(): void {
-    for (const d of this.disposables) d.dispose();
+  /**
+   * Called when a .vortex document changes. Updates the in-memory assembled source
+   * so the TS language service sees the latest content immediately.
+   */
+  handleDocumentChange(document: vscode.TextDocument): void {
+    this.ensureAssembled(document);
+  }
 
-    // Clean up temp files
-    for (const [, { filePath }] of this.tempFiles) {
-      try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+  /**
+   * Open the assembled source in a side editor for debugging/inspection.
+   * This is the ONLY place we write to disk — and only when explicitly requested.
+   */
+  async viewAssembledSource(document: vscode.TextDocument): Promise<void> {
+    const info = this.ensureAssembled(document);
+    if (!info) {
+      vscode.window.showWarningMessage('No assembled source available for this file.');
+      return;
     }
-    try {
-      fs.unlinkSync(path.join(this.tempDir, 'jsconfig.json'));
-      fs.rmdirSync(this.tempDir);
-    } catch { /* ignore */ }
+    fs.mkdirSync(this.tempDir, { recursive: true });
+    const baseName = path.basename(info.fileName);
+    const viewPath = path.join(this.tempDir, baseName);
+    fs.writeFileSync(viewPath, info.assembled.text);
+    await vscode.window.showTextDocument(vscode.Uri.file(viewPath), {
+      viewColumn: vscode.ViewColumn.Beside,
+      preview: true,
+      preserveFocus: true,
+    });
   }
 
   /**
@@ -282,10 +507,35 @@ export class VortexIntellisenseProvider implements
    */
   removeDocument(uri: vscode.Uri): void {
     const key = uri.toString();
-    const info = this.tempFiles.get(key);
+    const info = this.assembledCache.get(key);
     if (info) {
-      try { fs.unlinkSync(info.filePath); } catch { /* ignore */ }
-      this.tempFiles.delete(key);
+      if (this.tsClient) {
+        this.tsClient.removeFile(info.fileName);
+      }
+      this.assembledCache.delete(key);
     }
+  }
+
+  dispose(): void {
+    if (this.tsClient) {
+      this.tsClient.dispose();
+      this.tsClient = null;
+    }
+    if (this.goplsClient) {
+      this.goplsClient.dispose();
+      this.goplsClient = null;
+    }
+    if (this.roslynClient) {
+      this.roslynClient.dispose();
+      this.roslynClient = null;
+    }
+    // Clean up any temp files from "View Assembled Source"
+    try {
+      const files = fs.readdirSync(this.tempDir);
+      for (const f of files) {
+        try { fs.unlinkSync(path.join(this.tempDir, f)); } catch { /* ignore */ }
+      }
+      fs.rmdirSync(this.tempDir);
+    } catch { /* ignore */ }
   }
 }

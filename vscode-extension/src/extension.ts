@@ -2,9 +2,11 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHighlighterCore, type HighlighterCore, type ThemedToken } from 'shiki/core';
-import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
+import { createOnigurumaEngine } from 'shiki/engine/oniguruma';
 import { extractEmbeddedRegions, type EmbeddedRegion } from './parser';
 import { VortexIntellisenseProvider } from './intellisense';
+import { startYamlLanguageServer, stopYamlLanguageServer } from './yaml-client';
+import { log } from './log';
 
 // Fine-grained language imports
 import langJs from 'shiki/langs/javascript.mjs';
@@ -146,11 +148,13 @@ async function ensureHighlighter(): Promise<HighlighterCore | null> {
       } else {
         themes.push(themeDarkFallback, themeLightFallback);
         const kind = vscode.window.activeColorTheme.kind;
-        loadedThemeName = (kind === 1 || kind === 4) ? 'github-light' : 'github-dark-dimmed';
+        loadedThemeName = (kind === 1 || kind === 4)
+		  	? 'github-light'
+			: 'github-dark-dimmed';
       }
 
       const hl = await createHighlighterCore({
-        engine: createJavaScriptRegexEngine(),
+        engine: await createOnigurumaEngine(import('shiki/wasm')),
         themes,
         langs: [langJs, langGo, langCsharp],
       });
@@ -266,7 +270,28 @@ function debounce(fn: () => void, ms: number): () => void {
 
 let intellisenseProvider: VortexIntellisenseProvider | null = null;
 
+const SCHEMA_URL = 'https://raw.githubusercontent.com/arcmantle/vortex/master/schemas/vortex.schema.json';
+
 export function activate(context: vscode.ExtensionContext): void {
+  log('Vortex extension activating');
+  // Force .vortex files to 'vortex' language mode so the Red Hat YAML extension
+  // doesn't interfere. Our bundled yaml-language-server handles YAML intellisense.
+  function ensureVortexLanguage(doc: vscode.TextDocument): void {
+    if (isVortexFile(doc) && doc.languageId !== 'vortex') {
+      vscode.languages.setTextDocumentLanguage(doc, 'vortex');
+    }
+  }
+
+  /** Force 2-space indentation for .vortex editors (overrides detectIndentation). */
+  function ensureVortexEditorOptions(editor: vscode.TextEditor): void {
+    if (isVortexFile(editor.document)) {
+      editor.options = {
+        insertSpaces: true,
+        tabSize: 2,
+      };
+    }
+  }
+
   const triggerHighlight = debounce(() => {
     const editor = vscode.window.activeTextEditor;
     if (editor && isVortexFile(editor.document)) {
@@ -274,11 +299,16 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }, 150);
 
+  // --- YAML Language Server ---
+  startYamlLanguageServer(context, SCHEMA_URL).catch(e => {
+    console.error('Vortex: Failed to start YAML language server:', e);
+  });
+
   // --- Intellisense ---
   intellisenseProvider = new VortexIntellisenseProvider();
 
   const vortexSelector: vscode.DocumentSelector = [
-    { scheme: 'file', pattern: '**/*.vortex' },
+    { language: 'vortex', scheme: 'file' },
   ];
 
   context.subscriptions.push(
@@ -288,19 +318,32 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerDefinitionProvider(vortexSelector, intellisenseProvider),
     vscode.languages.registerSignatureHelpProvider(vortexSelector, intellisenseProvider, '(', ','),
     vscode.languages.registerDocumentHighlightProvider(vortexSelector, intellisenseProvider),
+    vscode.commands.registerCommand('vortex.viewAssembledSource', () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && isVortexFile(editor.document)) {
+        intellisenseProvider!.viewAssembledSource(editor.document);
+      }
+    }),
   );
+  log('Registered intellisense providers (JS + Go + C#) for language: vortex');
 
-  // --- Highlighting ---
+  // --- Highlighting & Language Mode ---
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(editor => {
       if (editor && isVortexFile(editor.document)) {
+        ensureVortexLanguage(editor.document);
+        ensureVortexEditorOptions(editor);
         applyHighlighting(editor);
       }
+    }),
+    vscode.workspace.onDidOpenTextDocument(doc => {
+      ensureVortexLanguage(doc);
     }),
     vscode.workspace.onDidChangeTextDocument(e => {
       if (isVortexFile(e.document)) {
         regionCache.delete(e.document.uri.toString());
         triggerHighlight();
+        intellisenseProvider?.handleDocumentChange(e.document);
       }
     }),
     vscode.window.onDidChangeActiveColorTheme(async () => {
@@ -318,13 +361,16 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  // Initial setup for active editor
   const editor = vscode.window.activeTextEditor;
   if (editor && isVortexFile(editor.document)) {
+    ensureVortexLanguage(editor.document);
+    ensureVortexEditorOptions(editor);
     applyHighlighting(editor);
   }
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   regionCache.clear();
   for (const [, deco] of decoTypeCache) {
     deco.dispose();
@@ -338,4 +384,5 @@ export function deactivate(): void {
     intellisenseProvider.dispose();
     intellisenseProvider = null;
   }
+  await stopYamlLanguageServer();
 }

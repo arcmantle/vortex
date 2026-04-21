@@ -1,0 +1,49 @@
+name: go-demo
+
+go:
+  imports:
+    - path: fmt
+      version: std
+    - path: os/exec
+      version: std
+    - path: os
+      version: std
+
+  vars:
+    apiBase: "http://localhost:3000"
+    appName: "my-app"
+
+  functions:
+    run: |
+      func run(name string, args ...string) {
+        cmd := exec.Command(name, args...)
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+
+        if err := cmd.Run(); err != nil {
+          fmt.Fprintf(os.Stderr, "command failed: %v\n", err)
+          os.Exit(1)
+        }
+      }
+    logBanner: |
+      func logBanner(text string) {
+        fmt.Printf("== %s ==\n", text)
+      }
+
+jobs:
+  - id: build
+    label: Build
+    shell: go
+    use: go
+    command: |
+      logBanner("Building " + appName)
+      run("go", "build", "./...")
+
+  - id: test
+    label: Test
+    shell: go
+    use: go
+    command: |
+      logBanner("Testing")
+      run("go", "test", "-v", "./...")
+      fmt.Println("done at", apiBase)
