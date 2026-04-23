@@ -1,14 +1,4 @@
 {
-	"files.associations": {
-		"*.vortex": "yaml"
-	},
-	"yaml.schemas": {
-		"./schemas/vortex.schema.json": [
-			"dev.vortex",
-			"mock/*.vortex",
-			"*.vortex"
-		]
-	},
 	"explorer.fileNesting.enabled": true,
 	"explorer.fileNesting.patterns": {
 		"*.go": "${capture}_test.go"

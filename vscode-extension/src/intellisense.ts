@@ -74,6 +74,11 @@ export class VortexIntellisenseProvider implements
 
     const existing = this.assembledCache.get(key);
     if (existing && existing.assembled.text === assembled.text) {
+      // Ensure TS client has this file even on cache hit (e.g. after
+      // switching from a C#/Go file — tsClient may have just been created)
+      if (assembled.languageId === 'javascript' && this.tsClient) {
+        this.tsClient.updateSource(existing.fileName, assembled.text);
+      }
       return existing;
     }
 

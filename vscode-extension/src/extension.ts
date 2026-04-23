@@ -71,6 +71,41 @@ const VORTEX_THEME_NAME = 'vortex-user-theme';
  * Find and load the user's current VS Code color theme as a shiki-compatible
  * theme object. Searches through installed extensions for the theme JSON.
  */
+/**
+ * Strip JSONC (JSON with Comments) to valid JSON.
+ * Handles // and /* comments only outside of string literals,
+ * and removes trailing commas before } or ].
+ */
+function stripJsonc(text: string): string {
+  let result = '';
+  let i = 0;
+  while (i < text.length) {
+    // String literal — copy verbatim
+    if (text[i] === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') {
+        if (text[j] === '\\') j++; // skip escaped char
+        j++;
+      }
+      result += text.slice(i, j + 1);
+      i = j + 1;
+    // Line comment
+    } else if (text[i] === '/' && text[i + 1] === '/') {
+      const nl = text.indexOf('\n', i);
+      i = nl === -1 ? text.length : nl;
+    // Block comment
+    } else if (text[i] === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end === -1 ? text.length : end + 2;
+    } else {
+      result += text[i];
+      i++;
+    }
+  }
+  // Remove trailing commas
+  return result.replace(/,(\s*[}\]])/g, '$1');
+}
+
 function loadCurrentVSCodeTheme(): any | null {
   const themeName = vscode.workspace.getConfiguration('workbench').get<string>('colorTheme');
   if (!themeName) return null;
@@ -84,23 +119,14 @@ function loadCurrentVSCodeTheme(): any | null {
         const themePath = path.join(ext.extensionPath, themeEntry.path);
         try {
           const raw = fs.readFileSync(themePath, 'utf-8');
-          // Strip JSON comments and trailing commas
-          const cleaned = raw
-            .replace(/\/\/.*$/gm, '')
-            .replace(/\/\*[\s\S]*?\*\//g, '')
-            .replace(/,(\s*[}\]])/g, '$1');
-          const themeData = JSON.parse(cleaned);
+          const themeData = JSON.parse(stripJsonc(raw));
 
           // Resolve "include" one level deep
           if (themeData.include) {
             const includePath = path.join(path.dirname(themePath), themeData.include);
             try {
               const includeRaw = fs.readFileSync(includePath, 'utf-8');
-              const includeCleaned = includeRaw
-                .replace(/\/\/.*$/gm, '')
-                .replace(/\/\*[\s\S]*?\*\//g, '')
-                .replace(/,(\s*[}\]])/g, '$1');
-              const includeData = JSON.parse(includeCleaned);
+              const includeData = JSON.parse(stripJsonc(includeRaw));
               themeData.colors = { ...includeData.colors, ...themeData.colors };
               if (includeData.tokenColors && !themeData.tokenColors) {
                 themeData.tokenColors = includeData.tokenColors;

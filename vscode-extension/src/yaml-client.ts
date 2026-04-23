@@ -71,6 +71,10 @@ export async function startYamlLanguageServer(
       provideDocumentHighlights: () => {
         return Promise.resolve([]);
       },
+      provideCodeLenses: () => {
+        // Suppress schema-association CodeLens from the yaml-language-server
+        return Promise.resolve([]);
+      },
     },
     initializationOptions: {
       schemas: {

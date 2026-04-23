@@ -16,7 +16,6 @@
 		"Programming Languages"
 	],
 	"activationEvents": [
-		"onLanguage:yaml",
 		"workspaceContains:**/*.vortex"
 	],
 	"main": "./out/extension.js",

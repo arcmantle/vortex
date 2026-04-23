@@ -208,6 +208,7 @@ export class RoslynClient {
     const text = assembled.text;
     if (text === this.currentText) return;
 
+    const previousText = this.currentText;
     this.currentText = text;
 
     // Update .csproj if framework/packages changed
@@ -216,20 +217,23 @@ export class RoslynClient {
     // Write the C# file
     fs.writeFileSync(this.programFilePath, text);
 
-    // Roslyn's DidChangeHandler requires a range on content changes —
-    // it crashes with NullReferenceException on rangeless full-content
-    // replacement. Use didClose + didOpen to replace the whole document.
-    this.sendNotification('textDocument/didClose', {
-      textDocument: { uri: this.programFileUri },
-    });
+    // Send didChange with an explicit range covering the full document.
+    // Roslyn crashes on rangeless full-content replacement (NullReferenceException
+    // in DidChangeHandler), but handles ranged replacement fine.
+    const prevLines = previousText.split('\n');
+    const lastLine = Math.max(0, prevLines.length - 1);
+    const lastChar = prevLines[lastLine]?.length ?? 0;
+
     this.fileVersion++;
-    this.sendNotification('textDocument/didOpen', {
-      textDocument: {
-        uri: this.programFileUri,
-        languageId: 'csharp',
-        version: this.fileVersion,
+    this.sendNotification('textDocument/didChange', {
+      textDocument: { uri: this.programFileUri, version: this.fileVersion },
+      contentChanges: [{
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: lastLine, character: lastChar },
+        },
         text,
-      },
+      }],
     });
   }
 
