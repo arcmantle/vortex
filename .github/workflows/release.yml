@@ -101,8 +101,10 @@ jobs:
           $zip = "llvm-mingw-$version-ucrt-x86_64.zip"
           Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/$zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath C:\llvm-mingw
-          echo "C:\llvm-mingw\llvm-mingw-$version-ucrt-x86_64\bin" >> $env:GITHUB_PATH
-          echo "CC=aarch64-w64-mingw32-clang" >> $env:GITHUB_ENV          echo "CXX=aarch64-w64-mingw32-clang++" >> $env:GITHUB_ENV
+          $binPath = "C:\llvm-mingw\llvm-mingw-$version-ucrt-x86_64\bin"
+          Add-Content $env:GITHUB_PATH $binPath
+          Add-Content $env:GITHUB_ENV "CC=aarch64-w64-mingw32-clang"
+          Add-Content $env:GITHUB_ENV "CXX=aarch64-w64-mingw32-clang++"
       - name: Build
         shell: bash
         run: |
