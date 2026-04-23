@@ -53,6 +53,12 @@ jobs:
             binary: vortex-windows-amd64.exe
             window_binary: vortex-window-windows-amd64.exe
             install_binary: vortex-install-windows-amd64.exe
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
+            binary: vortex-windows-arm64.exe
+            window_binary: vortex-window-windows-arm64.exe
+            install_binary: vortex-install-windows-arm64.exe
           - os: ubuntu-22.04
             goos: linux
             goarch: amd64
