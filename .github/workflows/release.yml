@@ -51,14 +51,20 @@ jobs:
             goos: windows
             goarch: amd64
             binary: vortex-windows-amd64.exe
+            window_binary: vortex-window-windows-amd64.exe
+            install_binary: vortex-install-windows-amd64.exe
           - os: ubuntu-22.04
             goos: linux
             goarch: amd64
             binary: vortex-linux-amd64
+            window_binary: vortex-window-linux-amd64
+            install_binary: vortex-install-linux-amd64
           - os: macos-latest
             goos: darwin
             goarch: arm64
             binary: vortex-darwin-arm64
+            window_binary: vortex-window-darwin-arm64
+            install_binary: vortex-install-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -117,8 +123,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary }}
-          path: ${{ matrix.binary }}
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ matrix.binary }}
+            ${{ matrix.window_binary }}
+            ${{ matrix.install_binary }}
           retention-days: 1
 
   # ── Create GitHub Release with all binaries ───────────────────────────
@@ -129,7 +138,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
-          pattern: vortex-*
+          pattern: binaries-*
           merge-multiple: true
 
       - name: Generate checksums

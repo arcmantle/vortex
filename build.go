@@ -82,7 +82,7 @@ func main() {
 	fmt.Printf("✓ Built %s\n", *output)
 
 	// Step 3: compile vortex-window (GUI subsystem on Windows).
-	windowOutput := windowBinaryOutput(*output, *targetOS)
+	windowOutput := windowBinaryOutput(*output, *targetOS, *targetArch)
 	fmt.Printf("── Compiling vortex-window (GUI) → %s\n", windowOutput)
 	windowLdflags := "-s -w"
 	if *targetOS == "windows" {
@@ -103,7 +103,7 @@ func main() {
 	fmt.Printf("✓ Built %s\n", windowOutput)
 
 	// Step 4: compile vortex-install (standalone installer, pinned to this version).
-	installerOutput := installerBinaryOutput(*output, *targetOS)
+	installerOutput := installerBinaryOutput(*output, *targetOS, *targetArch)
 	fmt.Printf("── Compiling vortex-install → %s\n", installerOutput)
 	installerLdflags := strings.Join([]string{
 		"-s", "-w",
@@ -126,9 +126,9 @@ func main() {
 
 // windowBinaryOutput derives the vortex-window binary path from the host
 // binary path by placing it alongside the host binary.
-func windowBinaryOutput(hostOutput, goos string) string {
+func windowBinaryOutput(hostOutput, goos, goarch string) string {
 	dir := filepath.Dir(hostOutput)
-	name := "vortex-window"
+	name := fmt.Sprintf("vortex-window-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
 	}
@@ -136,9 +136,9 @@ func windowBinaryOutput(hostOutput, goos string) string {
 }
 
 // installerBinaryOutput derives the vortex-install binary path.
-func installerBinaryOutput(hostOutput, goos string) string {
+func installerBinaryOutput(hostOutput, goos, goarch string) string {
 	dir := filepath.Dir(hostOutput)
-	name := "vortex-install"
+	name := fmt.Sprintf("vortex-install-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
 	}
