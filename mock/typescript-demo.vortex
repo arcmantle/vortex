@@ -1,0 +1,46 @@
+name: typescript-demo
+
+bun:
+  typescript: true
+
+  imports:
+    - from: node:child_process
+      names: [spawnSync]
+    - from: node:path
+      names: [join]
+
+  vars:
+    apiBase: "http://localhost:3000"
+    appName: "my-app"
+
+  functions:
+    run: |
+      export function run(name: string, ...args: string[]): void {
+        const result = spawnSync(name, args, { stdio: 'inherit' })
+        if (result.status !== 0) {
+          console.error(`command failed: ${name} (exit ${result.status})`)
+          process.exit(1)
+        }
+      }
+    logBanner: |
+      export function logBanner(text: string): void {
+        console.log(`== ${text} ==`)
+      }
+
+jobs:
+  - id: build
+    label: Build
+    shell: bun
+    use: bun
+    command: |
+      logBanner(`Building ${appName}`)
+      run("bun", "build", "--entrypoints", "src/index.ts", "--outdir", "dist")
+
+  - id: test
+    label: Test
+    shell: bun
+    use: bun
+    command: |
+      logBanner("Testing")
+      run("bun", "test")
+      console.log(`done at ${apiBase}`)
