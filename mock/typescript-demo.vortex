@@ -1,6 +1,6 @@
 name: typescript-demo
 
-bun:
+node:
   typescript: true
 
   imports:
@@ -30,17 +30,17 @@ bun:
 jobs:
   - id: build
     label: Build
-    shell: bun
-    use: bun
+    shell: node
+    use: node
     command: |
       logBanner(`Building ${appName}`)
-      run("bun", "build", "--entrypoints", "src/index.ts", "--outdir", "dist")
+      run("tsc", "--noEmit")
 
   - id: test
     label: Test
-    shell: bun
-    use: bun
+    shell: node
+    use: node
     command: |
       logBanner("Testing")
-      run("bun", "test")
+      run("node", "--test")
       console.log(`done at ${apiBase}`)
