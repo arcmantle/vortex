@@ -116,8 +116,10 @@ jobs:
       - name: Build
         shell: bash
         env:
-          CC: ${{ (matrix.goos == 'windows' && matrix.goarch == 'arm64') && 'aarch64-w64-mingw32-clang' || '' }}
-          CXX: ${{ (matrix.goos == 'windows' && matrix.goarch == 'arm64') && 'aarch64-w64-mingw32-clang++' || '' }}
+          CC: ${{ (matrix.goos == 'windows' && matrix.goarch == 'arm64') &&
+            'aarch64-w64-mingw32-clang' || '' }}
+          CXX: ${{ (matrix.goos == 'windows' && matrix.goarch == 'arm64') &&
+            'aarch64-w64-mingw32-clang++' || '' }}
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           COMMIT="${GITHUB_SHA::8}"
