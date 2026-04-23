@@ -91,6 +91,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.0-dev
 
+      # Windows arm64: install llvm-mingw so CGO can cross-compile to AArch64.
+      # The windows-latest runner is x64; standard MinGW only targets x86/x64.
+      - name: Install llvm-mingw (Windows/arm64 cross-compiler)
+        if: matrix.goos == 'windows' && matrix.goarch == 'arm64'
+        shell: pwsh
+        run: |
+          $version = "20240619"
+          $zip = "llvm-mingw-$version-ucrt-x86_64.zip"
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/$zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath C:\llvm-mingw
+          echo "C:\llvm-mingw\llvm-mingw-$version-ucrt-x86_64\bin" >> $env:GITHUB_PATH
+          echo "CC=aarch64-w64-mingw32-clang" >> $env:GITHUB_ENV
+
       - name: Build
         shell: bash
         run: |
@@ -103,7 +116,9 @@ jobs:
             -commit "$COMMIT" \
             -output "${{ matrix.binary }}"
 
+      # Smoke test only runs on amd64 — can't execute arm64 binaries on an x64 runner.
       - name: Smoke test embedded UI
+        if: matrix.goarch == 'amd64'
         shell: bash
         run: |
           ./${{ matrix.binary }} run --headless --port 7370 --config mock/release-smoke.vortex > smoke.log 2>&1 &
