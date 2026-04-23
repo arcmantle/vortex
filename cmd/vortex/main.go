@@ -37,7 +37,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -179,11 +178,6 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	showUIRequests := make(chan struct{}, 1)
-	var uiThread *uiThreadRunner
-	if runtime.GOOS != "darwin" {
-		uiThread = newUIThreadRunner()
-		defer uiThread.Close()
-	}
 	static := uiFS()
 	if !opts.dev && static == nil {
 		return fmt.Errorf("non-dev mode requires embedded UI assets; run pnpm build in cmd/vortex-ui/web and start with go run -tags embed_ui ./cmd/vortex ..., or use --dev")
@@ -193,7 +187,7 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	windowTitle := fmt.Sprintf("Vortex - %s", identity.DisplayName)
 	windowURL := fmt.Sprintf("http://%s?token=%s", addr, sessionToken)
-	ui := newUILifecycle(identity, windowTitle, windowURL, uiThread)
+	ui := newUILifecycle(identity, windowTitle, windowURL)
 
 	// Serve the handoff endpoint on the per-instance lock listener
 	// so that a second instance can POST to it. Without this, the raw TCP
@@ -223,17 +217,6 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	if !opts.dev {
 		if opts.headless {
 			log.Printf("Headless mode for %q: open http://%s in your browser if needed", identity.DisplayName, addr)
-		} else if runtime.GOOS == "darwin" {
-			// On Darwin the webview must run on the main thread, so Open()
-			// blocks. Run the event loop in a background goroutine so
-			// shutdown signals and show-ui requests are still handled.
-			go eventLoop(ctx, stop, orch, ui, showUIRequests, serverStopped, opts, identity, static)
-			ui.Open(ctx, stop, true)
-			// Shutdown synchronously here — the eventLoop goroutine also calls
-			// Shutdown via <-ctx.Done(), but it races with process exit so we
-			// cannot rely on it alone.
-			orch.Shutdown()
-			return nil
 		} else {
 			ui.Open(ctx, stop, true)
 		}

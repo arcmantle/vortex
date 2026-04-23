@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	windowsDetachedProcess        = 0x00000008
-	windowsCreateNewProcGroup     = 0x00000200
-	windowsCreateBreakawayFromJob = 0x01000000
+	windowsDetachedProcess    = 0x00000008
+	windowsCreateNewProcGroup = 0x00000200
 )
 
 var (
@@ -24,8 +23,8 @@ var (
 )
 
 // maybeFork respawns the process detached from any attached console when
-// needed. Proper release builds use -H=windowsgui and skip this path because
-// they already run without a console.
+// needed. The host binary is always a console-subsystem app, so non-dev
+// launches from a terminal will fork into a background process.
 func maybeFork() (bool, error) {
 	if !hasAttachedConsole() {
 		return false, nil
@@ -39,7 +38,7 @@ func maybeFork() (bool, error) {
 	args := append(append([]string(nil), os.Args[1:]...), "--forked")
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windowsDetachedProcess | windowsCreateNewProcGroup | windowsCreateBreakawayFromJob,
+		CreationFlags: windowsDetachedProcess | windowsCreateNewProcGroup,
 		HideWindow:    true,
 	}
 	if err := cmd.Start(); err != nil {
