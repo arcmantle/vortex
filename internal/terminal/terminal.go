@@ -84,11 +84,50 @@ type processHandle interface {
 	PID() int
 }
 
+// childTransport is the private terminal transport contract shared by the
+// platform-specific process starters and the public Terminal wrapper.
+type childTransport interface {
+	Stream() io.ReadCloser
+	Process() processHandle
+	WriteInput([]byte) error
+	Resize(cols, rows uint16) error
+	SignalEOF()
+}
+
 type startedChildProcess struct {
-	stream  io.ReadCloser
-	process processHandle
-	input   inputFunc
-	resize  resizeFunc
+	stream    io.ReadCloser
+	process   processHandle
+	input     inputFunc
+	resize    resizeFunc
+	// signalEOF, if non-nil, is called after the process exits to unblock the
+	// stream reader. On Windows this closes the PseudoConsole (without closing
+	// the reader) so the ConPTY output pipe delivers its remaining data and
+	// then EOF. On Unix the PTY reader signals EOF naturally; leave nil.
+	signalEOF func()
+}
+
+func (p startedChildProcess) Stream() io.ReadCloser { return p.stream }
+
+func (p startedChildProcess) Process() processHandle { return p.process }
+
+func (p startedChildProcess) WriteInput(data []byte) error {
+	if p.input == nil {
+		return nil
+	}
+	return p.input(data)
+}
+
+func (p startedChildProcess) Resize(cols, rows uint16) error {
+	if p.resize == nil {
+		return nil
+	}
+	return p.resize(cols, rows)
+}
+
+func (p startedChildProcess) SignalEOF() {
+	if p.signalEOF != nil {
+		p.signalEOF()
+	}
 }
 
 type execProcess struct {
@@ -169,14 +208,14 @@ func New(ctx context.Context, id, label, command string, args []string, dir stri
 	// racing with doKill and potentially orphaning grandchild processes.
 	cmd := exec.Command(command, args...)
 	cmd.Dir = dir
-	started, err := startChildProcess(cmd)
+	transport, err := startChildProcess(cmd)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	t.process = started.process
-	t.input = started.input
-	t.resize = started.resize
+	t.process = transport.Process()
+	t.input = transport.WriteInput
+	t.resize = transport.Resize
 
 	go func() {
 		select {
@@ -186,7 +225,7 @@ func New(ctx context.Context, id, label, command string, args []string, dir stri
 		}
 	}()
 
-	go t.drain(started.stream, started.process)
+	go t.drain(transport.Stream(), transport.Process(), transport.SignalEOF)
 	return t, nil
 }
 
@@ -204,8 +243,23 @@ func (t *Terminal) WriteInput(data []byte) error {
 	return t.input(data)
 }
 
-func (t *Terminal) drain(r io.ReadCloser, proc processHandle) {
+func (t *Terminal) drain(r io.ReadCloser, proc processHandle, signalEOF func()) {
 	defer r.Close()
+
+	// Run proc.Wait concurrently with reading. On Windows with ConPTY, the
+	// output pipe only receives EOF after ClosePseudoConsole is called.
+	// ClosePseudoConsole (signalEOF) causes the ConPTY to close the pipe
+	// write end, which unblocks Read and delivers remaining data before EOF.
+	exitCh := make(chan struct{})
+	var exitCode int
+	var exitErr error
+	go func() {
+		defer close(exitCh)
+		exitCode, exitErr = proc.Wait()
+		if signalEOF != nil {
+			signalEOF()
+		}
+	}()
 
 	buf := make([]byte, 4_096)
 	for {
@@ -215,13 +269,15 @@ func (t *Terminal) drain(r io.ReadCloser, proc processHandle) {
 		}
 		if readErr != nil {
 			if !errors.Is(readErr, io.EOF) {
+				log.Printf("[terminal] %s: stream read error: %v", t.ID, readErr)
 				t.appendChunk(time.Now(), []byte("\r\n\x1b[31m[stream error: "+readErr.Error()+"]\x1b[0m\r\n"))
 			}
 			break
 		}
 	}
 
-	code, err := proc.Wait()
+	<-exitCh // ensure proc.Wait has returned before we use its results
+	code, err := exitCode, exitErr
 	t.mu.Lock()
 	exitChunk := OutputChunk{T: time.Now(), Data: []byte("\r\n\x1b[2m[process exited]\x1b[0m\r\n")}
 	t.outputBuf.add(exitChunk)

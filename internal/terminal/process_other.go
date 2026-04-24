@@ -13,7 +13,7 @@ const (
 	defaultPTYRows = 32
 )
 
-func startChildProcess(cmd *exec.Cmd) (startedChildProcess, error) {
+func startChildProcess(cmd *exec.Cmd) (childTransport, error) {
 	setChildFlags(cmd)
 	cmd.Env = ensureTerminalEnv(cmd.Environ())
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: defaultPTYCols, Rows: defaultPTYRows})
