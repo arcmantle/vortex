@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -145,5 +148,60 @@ func TestShouldAttachConsoleForCLI(t *testing.T) {
 				t.Fatalf("shouldAttachConsoleForCLI(%v) = %v, want %v", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWindowBinaryNameUsesAbsolutePathForRelativeLookup(t *testing.T) {
+	tempDir := t.TempDir()
+	oldExecutablePath := resolveExecutablePath
+	oldLookupWindowBinary := lookupWindowBinary
+	t.Cleanup(func() {
+		resolveExecutablePath = oldExecutablePath
+		lookupWindowBinary = oldLookupWindowBinary
+	})
+
+	resolveExecutablePath = func() (string, error) {
+		return filepath.Join(tempDir, "bin", "vortex.exe"), nil
+	}
+	lookupWindowBinary = func(string) (string, error) {
+		return "vortex-window.exe", exec.ErrDot
+	}
+
+	want, err := filepath.Abs("vortex-window.exe")
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	if got := windowBinaryName(); got != want {
+		t.Fatalf("windowBinaryName() = %q, want %q", got, want)
+	}
+}
+
+func TestWindowBinaryNamePrefersSiblingExecutable(t *testing.T) {
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+	sibling := filepath.Join(binDir, "vortex-window.exe")
+	if err := os.WriteFile(sibling, []byte("stub"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	oldExecutablePath := resolveExecutablePath
+	oldLookupWindowBinary := lookupWindowBinary
+	t.Cleanup(func() {
+		resolveExecutablePath = oldExecutablePath
+		lookupWindowBinary = oldLookupWindowBinary
+	})
+
+	resolveExecutablePath = func() (string, error) {
+		return filepath.Join(binDir, "vortex.exe"), nil
+	}
+	lookupWindowBinary = func(string) (string, error) {
+		return "", errors.New("should not be called")
+	}
+
+	if got := windowBinaryName(); got != sibling {
+		t.Fatalf("windowBinaryName() = %q, want %q", got, sibling)
 	}
 }

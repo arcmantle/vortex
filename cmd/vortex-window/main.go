@@ -46,6 +46,7 @@ func main() {
 	var (
 		mu         sync.Mutex
 		controller webview.Controller
+		readySent  bool
 	)
 
 	// Read commands from the parent on stdin.
@@ -74,6 +75,7 @@ func main() {
 	ready := func(c webview.Controller) {
 		mu.Lock()
 		controller = c
+		readySent = true
 		mu.Unlock()
 		fmt.Fprintln(os.Stdout, "READY")
 		if c != nil {
@@ -82,5 +84,10 @@ func main() {
 	}
 
 	log.SetPrefix("[vortex-window] ")
+	log.Printf("starting native webview host for %s", *url)
 	webview.OpenWithContextAndReady(ctx, *title, *url, *width, *height, ready)
+	if !readySent {
+		log.Printf("native webview host returned before READY")
+		os.Exit(1)
+	}
 }

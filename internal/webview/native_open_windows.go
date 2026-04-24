@@ -180,6 +180,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime"
 	"unsafe"
 
 	"arcmantle/windowfocus"
@@ -279,6 +280,9 @@ func isWindow(hwnd uintptr) bool {
 }
 
 func openWithContext(ctx context.Context, title, url string, width, height int, onReady func(Controller)) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	windowfocus.ShowApp()
 
 	hostWindow, releaseHost, err := createHostWindow(width, height)

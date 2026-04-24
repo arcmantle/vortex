@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,11 @@ import (
 	"sync"
 
 	"arcmantle/vortex/internal/instance"
+)
+
+var (
+	resolveExecutablePath = os.Executable
+	lookupWindowBinary    = exec.LookPath
 )
 
 // uiLifecycle manages the native webview window lifecycle by spawning a
@@ -39,7 +45,7 @@ func newUILifecycle(identity instance.Identity, title, url string) *uiLifecycle 
 // windowBinaryName returns the path to the vortex-window executable.
 // It looks next to the current executable first, then falls back to PATH.
 func windowBinaryName() string {
-	self, err := os.Executable()
+	self, err := resolveExecutablePath()
 	if err == nil {
 		dir := filepath.Dir(self)
 		candidate := filepath.Join(dir, "vortex-window")
@@ -50,6 +56,15 @@ func windowBinaryName() string {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
+	}
+	if candidate, err := lookupWindowBinary("vortex-window"); err == nil || errors.Is(err, exec.ErrDot) {
+		if filepath.IsAbs(candidate) {
+			return candidate
+		}
+		if abs, absErr := filepath.Abs(candidate); absErr == nil {
+			return abs
+		}
+		return candidate
 	}
 	return "vortex-window"
 }
@@ -104,13 +119,25 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 		ui.markClosed(ctx, stop, stopOnClose)
 		return
 	}
-	cmd.Stderr = os.Stderr
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		log.Printf("vortex-window stderr pipe error: %v", err)
+		ui.markClosed(ctx, stop, stopOnClose)
+		return
+	}
 
 	if err := cmd.Start(); err != nil {
 		log.Printf("vortex-window start error: %v", err)
 		ui.markClosed(ctx, stop, stopOnClose)
 		return
 	}
+
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			log.Printf("vortex-window stderr: %s", scanner.Text())
+		}
+	}()
 
 	// Wait for the READY signal from the child.
 	scanner := bufio.NewScanner(stdoutPipe)
