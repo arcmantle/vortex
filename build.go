@@ -33,13 +33,14 @@ func main() {
 	commit := flag.String("commit", "", "git commit hash (default: from git)")
 	output := flag.String("output", "", "output binary path (default: auto)")
 	buildUI := flag.Bool("ui", false, "build frontend UI before compiling")
+	local := flag.Bool("local", false, "build runnable local binaries in ./bin")
 	flag.Parse()
 
 	if *commit == "" {
 		*commit = gitCommit()
 	}
 	if *output == "" {
-		*output = defaultOutput(*targetOS, *targetArch)
+		*output = defaultOutput(*targetOS, *targetArch, *local)
 	}
 
 	fmt.Printf("Building vortex %s (%s/%s) → %s\n", *version, *targetOS, *targetArch, *output)
@@ -66,6 +67,7 @@ func main() {
 	env = setEnv(env, "CGO_ENABLED", "1")
 	env = setEnv(env, "GOOS", *targetOS)
 	env = setEnv(env, "GOARCH", *targetArch)
+	env = configureLocalToolchain(env, *targetOS, *targetArch, *local)
 
 	cmd := exec.Command("go", "build",
 		"-tags", "embed_ui",
@@ -82,7 +84,7 @@ func main() {
 	fmt.Printf("✓ Built %s\n", *output)
 
 	// Step 3: compile vortex-window (GUI subsystem on Windows).
-	windowOutput := windowBinaryOutput(*output, *targetOS, *targetArch)
+	windowOutput := windowBinaryOutput(*output, *targetOS, *targetArch, *local)
 	fmt.Printf("── Compiling vortex-window (GUI) → %s\n", windowOutput)
 	windowLdflags := "-s -w"
 	if *targetOS == "windows" {
@@ -103,7 +105,7 @@ func main() {
 	fmt.Printf("✓ Built %s\n", windowOutput)
 
 	// Step 4: compile vortex-install (standalone installer, pinned to this version).
-	installerOutput := installerBinaryOutput(*output, *targetOS, *targetArch)
+	installerOutput := installerBinaryOutput(*output, *targetOS, *targetArch, *local)
 	fmt.Printf("── Compiling vortex-install → %s\n", installerOutput)
 	installerLdflags := strings.Join([]string{
 		"-s", "-w",
@@ -126,8 +128,15 @@ func main() {
 
 // windowBinaryOutput derives the vortex-window binary path from the host
 // binary path by placing it alongside the host binary.
-func windowBinaryOutput(hostOutput, goos, goarch string) string {
+func windowBinaryOutput(hostOutput, goos, goarch string, local bool) string {
 	dir := filepath.Dir(hostOutput)
+	if local {
+		name := "vortex-window"
+		if goos == "windows" {
+			name += ".exe"
+		}
+		return filepath.Join(dir, name)
+	}
 	name := fmt.Sprintf("vortex-window-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
@@ -136,8 +145,15 @@ func windowBinaryOutput(hostOutput, goos, goarch string) string {
 }
 
 // installerBinaryOutput derives the vortex-install binary path.
-func installerBinaryOutput(hostOutput, goos, goarch string) string {
+func installerBinaryOutput(hostOutput, goos, goarch string, local bool) string {
 	dir := filepath.Dir(hostOutput)
+	if local {
+		name := "vortex-install"
+		if goos == "windows" {
+			name += ".exe"
+		}
+		return filepath.Join(dir, name)
+	}
 	name := fmt.Sprintf("vortex-install-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
@@ -155,12 +171,97 @@ func gitCommit() string {
 }
 
 // defaultOutput returns a platform-appropriate binary name.
-func defaultOutput(goos, goarch string) string {
+func defaultOutput(goos, goarch string, local bool) string {
+	if local {
+		name := filepath.Join("bin", "vortex")
+		if goos == "windows" {
+			name += ".exe"
+		}
+		return name
+	}
+
 	name := fmt.Sprintf("vortex-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
 	}
 	return name
+}
+
+func configureLocalToolchain(env []string, goos, goarch string, local bool) []string {
+	if !local || goos != "windows" || goarch != "arm64" {
+		return env
+	}
+
+	binDir, ok := findLocalLLVMMinGWBin()
+	if !ok {
+		return env
+	}
+
+	fmt.Printf("── Using llvm-mingw toolchain from %s\n", binDir)
+	env = prependPath(env, binDir)
+	if envValue(env, "CC") == "" {
+		env = setEnv(env, "CC", "aarch64-w64-mingw32-clang")
+	}
+	if envValue(env, "CXX") == "" {
+		env = setEnv(env, "CXX", "aarch64-w64-mingw32-clang++")
+	}
+	return env
+}
+
+func findLocalLLVMMinGWBin() (string, bool) {
+	patterns := []string{
+		filepath.Join(".tools", "llvm-mingw-local", "llvm-mingw-*-ucrt-x86_64", "bin"),
+		filepath.Join(".tools", "llvm-mingw", "llvm-mingw-*-ucrt-x86_64", "bin"),
+	}
+
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		for _, match := range matches {
+			clang := filepath.Join(match, "aarch64-w64-mingw32-clang.exe")
+			clangxx := filepath.Join(match, "aarch64-w64-mingw32-clang++.exe")
+			if fileExists(clang) && fileExists(clangxx) {
+				absMatch, err := filepath.Abs(match)
+				if err == nil {
+					return absMatch, true
+				}
+				return match, true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
+}
+
+func prependPath(env []string, value string) []string {
+	current := envValue(env, "PATH")
+	if current == "" {
+		return setEnv(env, "PATH", value)
+	}
+	if strings.Contains(strings.ToLower(current), strings.ToLower(value)) {
+		return env
+	}
+	return setEnv(env, "PATH", value+string(os.PathListSeparator)+current)
 }
 
 // run executes a command in the given directory and exits on failure.

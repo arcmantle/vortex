@@ -10,4 +10,5 @@ cmd/vortex-ui/web/wailsjs/*.exe
 *.exe
 *.syso
 .tmp
+.tools/
 vortex-local
