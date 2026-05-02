@@ -135,11 +135,17 @@ func buildWindows() {
 }
 
 func doOpen() {
+	// Kill any running vortex instances so the new binary is used.
+	killVortex()
+
 	// Remove existing vortex install so the bootstrap actually runs.
 	uninstallVortex()
 
 	switch runtime.GOOS {
 	case "darwin":
+		// Detach any previously mounted Vortex DMG volumes.
+		detachVortexDMG()
+
 		dmgPath := filepath.Join(workDir, "Vortex.dmg")
 		step("Opening DMG")
 		run("open", dmgPath)
@@ -184,16 +190,89 @@ func uninstallVortex() {
 			removed = true
 		}
 	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		appPath := "/Applications/Vortex.app"
+		if _, err := os.Stat(appPath); err == nil {
+			os.RemoveAll(appPath)
+			removed = true
+			step("Removed " + appPath)
+		}
+	case "windows":
+		// Remove uninstall.exe from install dir.
+		uninstallExe := filepath.Join(installDir, "uninstall.exe")
+		if _, err := os.Stat(uninstallExe); err == nil {
+			os.Remove(uninstallExe)
+			removed = true
+		}
+		// Remove Start Menu shortcut.
+		appData := os.Getenv("APPDATA")
+		if appData != "" {
+			shortcut := filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Vortex.lnk")
+			if _, err := os.Stat(shortcut); err == nil {
+				os.Remove(shortcut)
+				removed = true
+			}
+		}
+		// Remove Add/Remove Programs registry entry.
+		exec.Command("reg", "delete",
+			`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Vortex`,
+			"/f").Run()
+		// Remove the install directory itself if empty.
+		os.Remove(installDir)
+	}
+
 	if removed {
 		step("Uninstalled existing vortex from " + installDir)
 	}
 }
 
+func killVortex() {
+	killed := false
+	switch runtime.GOOS {
+	case "darwin", "linux":
+		// Kill vortex-window first (the UI), then vortex itself.
+		for _, name := range []string{"vortex-window", "vortex"} {
+			cmd := exec.Command("pkill", "-f", name)
+			if cmd.Run() == nil {
+				killed = true
+			}
+		}
+	case "windows":
+		for _, name := range []string{"vortex-window.exe", "vortex.exe"} {
+			cmd := exec.Command("taskkill", "/F", "/IM", name)
+			cmd.Run()
+			killed = true
+		}
+	}
+	if killed {
+		step("Killed running vortex processes")
+	}
+}
+
 func doClean() {
 	step("Cleaning up")
+	if runtime.GOOS == "darwin" {
+		detachVortexDMG()
+	}
 	os.RemoveAll(workDir)
 	info("Removed %s", workDir)
 	success("Clean")
+}
+
+func detachVortexDMG() {
+	// Detach all mounted Vortex volumes (handles "Vortex", "Vortex 1", etc.)
+	for i := 0; i < 10; i++ {
+		vol := "/Volumes/Vortex"
+		if i > 0 {
+			vol = fmt.Sprintf("/Volumes/Vortex %d", i)
+		}
+		if _, err := os.Stat(vol); err != nil {
+			continue
+		}
+		exec.Command("hdiutil", "detach", vol).Run()
+	}
 }
 
 // --- helpers ---

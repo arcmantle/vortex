@@ -14,8 +14,9 @@ This will:
 2. Compile `vortex`, `vortex-window`, `vortex-bootstrap`, `vortex-launcher`
 3. Assemble a `Vortex.app` bundle with the binaries embedded
 4. Create a DMG
-5. **Remove your existing `~/.local/bin/vortex` install** so the bootstrap triggers
-6. Open the DMG in Finder
+5. **Kill any running vortex processes** (they'd show stale UI otherwise)
+6. **Remove your existing `~/.local/bin/vortex` install** so the bootstrap triggers
+7. Open the DMG in Finder
 
 Then you:
 
