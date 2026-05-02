@@ -6,7 +6,14 @@
     <title>Vortex</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      html, body { height: 100%; overflow: hidden; background: #1e1e1e; }
+      html, body { height: 100%; overflow: hidden; background: var(--vx-surface-0, #1e1e1e); }
+
+      /* Themed scrollbars (document-level) */
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--vx-scrollbar-thumb, #42424280); border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--vx-scrollbar-thumb-hover, #555555b3); }
+      ::-webkit-scrollbar-corner { background: transparent; }
     </style>
   </head>
   <body>

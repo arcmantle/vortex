@@ -180,14 +180,15 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 	showUIRequests := make(chan struct{}, 1)
 	static := uiFS()
 	if !opts.dev && static == nil {
-		return fmt.Errorf("non-dev mode requires embedded UI assets; run pnpm build in cmd/vortex-ui/web and start with go run -tags embed_ui ./cmd/vortex ..., or use --dev")
+		return fmt.Errorf("non-dev mode requires embedded UI assets; build the frontend first (pnpm build in cmd/vortex-ui/web), or use --dev")
 	}
 
-	srv := server.New(ctx, orch, static, opts.dev, "http://localhost:5173", server.InstanceInfo{Name: identity.DisplayName, RegistryName: identity.Name, HTTPPort: httpPort}, sessionToken, configPath)
+	srv := server.New(ctx, orch, static, opts.dev, "http://localhost:5173", server.InstanceInfo{Name: identity.DisplayName, RegistryName: identity.Name, HTTPPort: httpPort}, sessionToken, configPath, cfg.WorkingDir)
 	addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	windowTitle := fmt.Sprintf("Vortex - %s", identity.DisplayName)
 	windowURL := fmt.Sprintf("http://%s?token=%s", addr, sessionToken)
 	ui := newUILifecycle(identity, windowTitle, windowURL)
+	ui.onClose = func() { orch.KillOnCloseJobs() }
 
 	// Serve the handoff endpoint on the per-instance lock listener
 	// so that a second instance can POST to it. Without this, the raw TCP
@@ -218,7 +219,7 @@ func runWithOptions(rawArgs []string, opts cliOptions) error {
 		if opts.headless {
 			log.Printf("Headless mode for %q: open http://%s in your browser if needed", identity.DisplayName, addr)
 		} else {
-			ui.Open(ctx, stop, true)
+			ui.Open(ctx, stop, false)
 		}
 	} else {
 		log.Printf("Dev mode for %q: open http://%s in your browser (or use the Vite dev server)", identity.DisplayName, addr)
@@ -247,12 +248,156 @@ func eventLoop(ctx context.Context, stop context.CancelFunc, orch *orchestrator.
 				continue
 			}
 			log.Printf("Opening native UI for %q", identity.DisplayName)
-			if !ui.Open(ctx, stop, true) {
+			if !ui.Open(ctx, stop, false) {
 				if ui.Focus() {
 					log.Printf("Surfaced native UI for %q", identity.DisplayName)
 					continue
 				}
 				log.Printf("Ignoring show-ui for %q: UI is already open", identity.DisplayName)
+			}
+		}
+	}
+}
+
+const bareInstanceName = "vortex"
+const bareDefaultPort = 7370
+
+func runBareMode(opts cliOptions) error {
+	opts.portSet = opts.port != 0
+	if opts.portSet && (opts.port < 1 || opts.port > 65535) {
+		return fmt.Errorf("--port must be between 1 and 65535, got %d", opts.port)
+	}
+	if opts.dev && opts.headless {
+		return fmt.Errorf("--dev and --headless cannot be used together")
+	}
+
+	identity, err := instance.NewIdentity(bareInstanceName)
+	if err != nil {
+		return fmt.Errorf("internal error: %w", err)
+	}
+
+	// Override identity port to use bare default.
+	httpPort := bareDefaultPort
+	if opts.portSet {
+		httpPort = opts.port
+	}
+
+	// --- Named-instance check ---
+	l, first, err := instance.TryLock(identity)
+	if err != nil {
+		return fmt.Errorf("instance lock error: %w", err)
+	}
+	if !first {
+		// Singleton already running — request it to show its UI.
+		if err := instance.ShowUI(identity); err != nil {
+			return fmt.Errorf("failed to connect to running instance: %w", err)
+		}
+		fmt.Println("Connected to running Vortex instance.")
+		return nil
+	}
+
+	// Detach from terminal in non-dev mode.
+	if shouldDetachFromTerminal(opts) {
+		forked, forkErr := maybeFork()
+		if forkErr != nil {
+			l.Close()
+			return fmt.Errorf("fork error: %w", forkErr)
+		}
+		if forked {
+			l.Close()
+			return nil
+		}
+	}
+
+	if opts.forked {
+		if logFile, err := openLogFile(identity.Name); err != nil {
+			log.Printf("warning: could not open log file: %v", err)
+		} else {
+			log.SetOutput(logFile)
+			defer logFile.Close()
+		}
+	}
+
+	defer l.Close()
+	sessionToken, cleanupRegistry, err := instance.Register(identity, httpPort, opts.dev, opts.headless, initialUIState(opts))
+	if err != nil {
+		log.Printf("instance registry warning: %v", err)
+	} else {
+		defer cleanupRegistry()
+	}
+
+	// Resolve working directory for shells — use $HOME.
+	homeDir, _ := os.UserHomeDir()
+	if homeDir == "" {
+		homeDir, _ = os.Getwd()
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	showUIRequests := make(chan struct{}, 1)
+	static := uiFS()
+	if !opts.dev && static == nil {
+		return fmt.Errorf("non-dev mode requires embedded UI assets; build the frontend first (pnpm build in cmd/vortex-ui/web), or use --dev")
+	}
+
+	srv := server.New(ctx, nil, static, opts.dev, "http://localhost:5173", server.InstanceInfo{Name: identity.DisplayName, RegistryName: identity.Name, HTTPPort: httpPort}, sessionToken, "", homeDir)
+	addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+	windowTitle := "Vortex"
+	windowURL := fmt.Sprintf("http://%s?token=%s", addr, sessionToken)
+	ui := newUILifecycle(identity, windowTitle, windowURL)
+
+	instance.ServeHandoff(l, identity, sessionToken, handoffHandler(ctx, stop, identity, nil, ui, showUIRequests, opts))
+
+	// Start HTTP server in background.
+	serverErr := make(chan error, 1)
+	serverStopped := make(chan struct{})
+	go func() {
+		log.Printf("Vortex listening on http://%s", addr)
+		serverErr <- server.ListenAndServe(ctx, addr, srv.Handler())
+	}()
+	go func() {
+		err := <-serverErr
+		if err != nil {
+			log.Printf("server error: %v", err)
+		}
+		stop()
+		close(serverStopped)
+	}()
+
+	if !opts.dev {
+		if opts.headless {
+			log.Printf("Headless mode: open http://%s in your browser", addr)
+		} else {
+			ui.Open(ctx, stop, false)
+		}
+	} else {
+		log.Printf("Dev mode: open http://%s in your browser (or use the Vite dev server)", addr)
+	}
+
+	bareEventLoop(ctx, stop, ui, showUIRequests, serverStopped, opts, identity, static)
+	return nil
+}
+
+func bareEventLoop(ctx context.Context, stop context.CancelFunc, ui *uiLifecycle, showUIRequests <-chan struct{}, serverStopped <-chan struct{}, opts cliOptions, identity instance.Identity, static fs.FS) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-serverStopped:
+			return
+		case <-showUIRequests:
+			if opts.dev {
+				log.Printf("Ignoring show-ui: instance is running in dev mode")
+				continue
+			}
+			if static == nil {
+				log.Printf("Ignoring show-ui: embedded UI assets are unavailable")
+				continue
+			}
+			if !ui.Open(ctx, stop, false) {
+				if ui.Focus() {
+					continue
+				}
 			}
 		}
 	}

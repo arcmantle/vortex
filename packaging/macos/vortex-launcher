@@ -1,0 +1,14 @@
+#!/bin/zsh --login
+# Vortex launcher — uses login shell to inherit the user's full environment
+# (PATH, homebrew, nvm, pyenv, etc.) before exec'ing the vortex binary.
+
+VORTEX_BIN="$HOME/.local/bin/vortex"
+
+if [[ ! -x "$VORTEX_BIN" ]]; then
+    # First launch: binaries not yet installed — run bootstrap.
+    # The bootstrap binary is bundled alongside this launcher.
+    BUNDLE_DIR="$(cd "$(dirname "$0")" && pwd)"
+    exec "$BUNDLE_DIR/vortex-bootstrap" "$@"
+fi
+
+exec "$VORTEX_BIN" "$@"

@@ -744,6 +744,10 @@
 				"restart": {
 					"type": "boolean",
 					"description": "Whether the job should be restarted when the config is reloaded."
+				},
+				"kill_on_close": {
+					"type": "boolean",
+					"description": "Whether the job should be killed when the GUI window is closed. Defaults to false."
 				}
 			}
 		}

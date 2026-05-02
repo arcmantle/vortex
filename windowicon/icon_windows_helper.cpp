@@ -1,4 +1,5 @@
 #include "icon_windows_helper.h"
+#ifdef _WIN32
 #include <string.h>
 #include <objidl.h>
 #include <gdiplus.h>
@@ -58,3 +59,4 @@ extern "C" void setWindowIconFromData(void *hwnd, const void *data, int len) {
 	stream->Release();
 	GdiplusShutdown(token);
 }
+#endif /* _WIN32 */

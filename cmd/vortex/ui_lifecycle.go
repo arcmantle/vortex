@@ -32,6 +32,7 @@ type uiLifecycle struct {
 	identity     instance.Identity
 	windowTitle  string
 	windowURL    string
+	onClose      func() // called when the window closes (nil-safe)
 }
 
 func newUILifecycle(identity instance.Identity, title, url string) *uiLifecycle {
@@ -170,6 +171,7 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 func (ui *uiLifecycle) markClosed(ctx context.Context, stop context.CancelFunc, stopOnClose bool) {
 	ui.mu.Lock()
 	suppress := ui.suppressStop
+	onClose := ui.onClose
 	ui.open = false
 	ui.suppressStop = false
 	ui.cancel = nil
@@ -183,6 +185,11 @@ func (ui *uiLifecycle) markClosed(ctx context.Context, stop context.CancelFunc, 
 		if err := instance.SetUIState(ui.identity, "hidden"); err != nil {
 			log.Printf("instance registry warning: %v", err)
 		}
+	}
+
+	// Invoke onClose for non-suppressed window closes (real user action).
+	if !suppress && onClose != nil {
+		onClose()
 	}
 
 	if stopOnClose && !suppress && ctx.Err() == nil {

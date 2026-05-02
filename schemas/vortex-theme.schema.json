@@ -1,0 +1,232 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://vortex.dev/schemas/vortex-theme.schema.json",
+	"title": "Vortex Theme",
+	"description": "Schema for custom Vortex color themes placed in ~/.config/vortex/themes/",
+	"type": "object",
+	"required": [
+		"name",
+		"type",
+		"colors"
+	],
+	"properties": {
+		"name": {
+			"type": "string",
+			"description": "Display name of the theme"
+		},
+		"author": {
+			"type": "string",
+			"description": "Author of the theme"
+		},
+		"type": {
+			"type": "string",
+			"enum": [
+				"dark",
+				"light"
+			],
+			"description": "Whether this is a dark or light theme (affects system mode fallback)"
+		},
+		"colors": {
+			"type": "object",
+			"description": "Color token definitions",
+			"required": [
+				"surface-0",
+				"surface-1",
+				"surface-2",
+				"surface-3",
+				"surface-4",
+				"surface-5",
+				"text-primary",
+				"text-secondary",
+				"text-muted",
+				"text-inverse",
+				"border-subtle",
+				"border-default",
+				"border-strong",
+				"accent",
+				"accent-hover",
+				"accent-active",
+				"accent-muted",
+				"success",
+				"error",
+				"warning",
+				"info",
+				"scrollbar-thumb",
+				"scrollbar-thumb-hover",
+				"scrollbar-thumb-active",
+				"ansi-black",
+				"ansi-red",
+				"ansi-green",
+				"ansi-yellow",
+				"ansi-blue",
+				"ansi-magenta",
+				"ansi-cyan",
+				"ansi-white",
+				"ansi-bright-black",
+				"ansi-bright-red",
+				"ansi-bright-green",
+				"ansi-bright-yellow",
+				"ansi-bright-blue",
+				"ansi-bright-magenta",
+				"ansi-bright-cyan",
+				"ansi-bright-white"
+			],
+			"properties": {
+				"surface-0": {
+					"$ref": "#/$defs/color"
+				},
+				"surface-1": {
+					"$ref": "#/$defs/color"
+				},
+				"surface-2": {
+					"$ref": "#/$defs/color"
+				},
+				"surface-3": {
+					"$ref": "#/$defs/color"
+				},
+				"surface-4": {
+					"$ref": "#/$defs/color"
+				},
+				"surface-5": {
+					"$ref": "#/$defs/color"
+				},
+				"text-primary": {
+					"$ref": "#/$defs/color"
+				},
+				"text-secondary": {
+					"$ref": "#/$defs/color"
+				},
+				"text-muted": {
+					"$ref": "#/$defs/color"
+				},
+				"text-inverse": {
+					"$ref": "#/$defs/color"
+				},
+				"border-subtle": {
+					"$ref": "#/$defs/color"
+				},
+				"border-default": {
+					"$ref": "#/$defs/color"
+				},
+				"border-strong": {
+					"$ref": "#/$defs/color"
+				},
+				"accent": {
+					"$ref": "#/$defs/color"
+				},
+				"accent-hover": {
+					"$ref": "#/$defs/color"
+				},
+				"accent-active": {
+					"$ref": "#/$defs/color"
+				},
+				"accent-muted": {
+					"$ref": "#/$defs/color"
+				},
+				"success": {
+					"$ref": "#/$defs/color"
+				},
+				"error": {
+					"$ref": "#/$defs/color"
+				},
+				"warning": {
+					"$ref": "#/$defs/color"
+				},
+				"info": {
+					"$ref": "#/$defs/color"
+				},
+				"scrollbar-thumb": {
+					"$ref": "#/$defs/color"
+				},
+				"scrollbar-thumb-hover": {
+					"$ref": "#/$defs/color"
+				},
+				"scrollbar-thumb-active": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-black": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-red": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-green": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-yellow": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-blue": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-magenta": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-cyan": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-white": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-black": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-red": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-green": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-yellow": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-blue": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-magenta": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-cyan": {
+					"$ref": "#/$defs/color"
+				},
+				"ansi-bright-white": {
+					"$ref": "#/$defs/color"
+				}
+			},
+			"additionalProperties": false
+		},
+		"backgroundImage": {
+			"type": [
+				"string",
+				"null"
+			],
+			"description": "URL or path to a background image"
+		},
+		"backgroundOpacity": {
+			"type": "number",
+			"minimum": 0,
+			"maximum": 1,
+			"default": 0.15,
+			"description": "Opacity of the background image overlay"
+		},
+		"backgroundBlur": {
+			"type": "number",
+			"minimum": 0,
+			"maximum": 100,
+			"default": 12,
+			"description": "Blur radius in pixels for the background image"
+		}
+	},
+	"additionalProperties": false,
+	"$defs": {
+		"color": {
+			"type": "string",
+			"description": "A CSS color value (hex, rgb, rgba, hsl, etc.)",
+			"examples": [
+				"#1e1e1e",
+				"rgb(30, 30, 30)",
+				"rgba(0, 120, 212, 0.2)"
+			]
+		}
+	}
+}

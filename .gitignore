@@ -11,4 +11,7 @@ cmd/vortex-ui/web/wailsjs/*.exe
 *.syso
 .tmp
 .tools/
-vortex-local
+/vortex
+/vortex-window
+/vortex-bootstrap
+*.dmg

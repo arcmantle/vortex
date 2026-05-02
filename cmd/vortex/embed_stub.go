@@ -1,10 +1,10 @@
-//go:build !embed_ui
+//go:build no_embed_ui
 
 package main
 
 import "io/fs"
 
-// uiFS returns nil when the UI has not been embedded (dev mode / go run).
+// uiFS returns nil when the UI has been excluded via the no_embed_ui tag.
 // The server handles nil staticFS by not serving static files.
 func uiFS() fs.FS {
 	return nil

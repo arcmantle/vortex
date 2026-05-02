@@ -26,6 +26,7 @@ import (
 
 	"arcmantle/vortex/internal/instance"
 	"arcmantle/vortex/internal/orchestrator"
+	"arcmantle/vortex/internal/settings"
 	"arcmantle/vortex/internal/terminal"
 	"arcmantle/vortex/internal/webview"
 )
@@ -40,32 +41,37 @@ type InstanceInfo struct {
 // Server is the Vortex HTTP server.
 type Server struct {
 	appCtx         context.Context
-	orch           *orchestrator.Orchestrator
+	orch           *orchestrator.Orchestrator // nil in bare (shells-only) mode
+	shells         *ShellManager
 	static         fs.FS
 	devMode        bool
 	devServerProxy string // e.g. "http://localhost:5173"
 	instance       InstanceInfo
 	token          string // session token for API authentication
 	configPath     string // absolute path to the running .vortex config file
+	workDir        string // working directory for shells and open-path resolution
 }
 
 // New creates a Server.
-//   - orch: job orchestrator
+//   - orch: job orchestrator (nil for bare/shells-only mode)
 //   - static: embedded FS containing the web UI build output (nil in dev mode)
 //   - devMode: when true, /api/* is served but static files are not embedded
 //   - devServerURL: Vite dev server URL to proxy static requests to (unused when devMode==false)
 //   - token: session token for API auth (empty string disables auth)
-//   - configPath: absolute path to the running .vortex config file
-func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, devMode bool, devServerURL string, instance InstanceInfo, token string, configPath string) *Server {
+//   - configPath: absolute path to the running .vortex config file (empty in bare mode)
+//   - workDir: working directory for shells and path resolution
+func New(appCtx context.Context, orch *orchestrator.Orchestrator, static fs.FS, devMode bool, devServerURL string, instance InstanceInfo, token string, configPath string, workDir string) *Server {
 	return &Server{
 		appCtx:         appCtx,
 		orch:           orch,
+		shells:         NewShellManager(workDir),
 		static:         static,
 		devMode:        devMode,
 		devServerProxy: devServerURL,
 		instance:       instance,
 		token:          token,
 		configPath:     configPath,
+		workDir:        workDir,
 	}
 }
 
@@ -82,6 +88,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/terminals/{id}/rerun", s.handleRerunTerminal)
 	mux.HandleFunc("POST /api/terminals/{id}/size", s.handleResizeTerminal)
 	mux.HandleFunc("DELETE /api/terminals/{id}/buffer", s.handleClearBuffer)
+	mux.HandleFunc("POST /api/shells", s.handleCreateShell)
+	mux.HandleFunc("DELETE /api/shells/{id}", s.handleCloseShell)
+	mux.HandleFunc("GET /api/settings/shells", s.handleGetShellProfiles)
+	mux.HandleFunc("PUT /api/settings/shells", s.handleSaveShellProfiles)
+	mux.HandleFunc("POST /api/settings/shells/detect", s.handleDetectShells)
+	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
+	mux.HandleFunc("PUT /api/settings", s.handleSaveSettings)
+	mux.HandleFunc("GET /api/themes", s.handleListCustomThemes)
+	mux.HandleFunc("POST /api/themes", s.handleSaveCustomTheme)
 	mux.HandleFunc("POST /api/open-path", s.handleOpenPath)
 	mux.HandleFunc("GET /api/config-file", s.handleGetConfigFile)
 
@@ -157,19 +172,28 @@ func jobToInfo(j *orchestrator.Job) terminalInfo {
 }
 
 func (s *Server) handleListTerminals(w http.ResponseWriter, r *http.Request) {
-	jobs := s.orch.AllJobs()
-	infos := make([]terminalInfo, len(jobs))
-	for i, j := range jobs {
-		infos[i] = jobToInfo(j)
+	var infos []terminalInfo
+	var gen int
+	if s.orch != nil {
+		jobs := s.orch.AllJobs()
+		infos = make([]terminalInfo, len(jobs))
+		for i, j := range jobs {
+			infos[i] = jobToInfo(j)
+		}
+		gen = s.orch.Generation()
+	} else {
+		infos = []terminalInfo{}
 	}
 	writeJSON(w, struct {
 		Instance  InstanceInfo   `json:"instance"`
 		Gen       int            `json:"gen"`
 		Terminals []terminalInfo `json:"terminals"`
+		Shells    []ShellInfo    `json:"shells"`
 	}{
 		Instance:  s.instance,
-		Gen:       s.orch.Generation(),
+		Gen:       gen,
 		Terminals: infos,
+		Shells:    s.shells.All(),
 	})
 }
 
@@ -185,6 +209,10 @@ type outputDTO struct {
 
 func (s *Server) handleGetTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if s.orch == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	j, ok := s.orch.GetJob(id)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -217,8 +245,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id query param", http.StatusBadRequest)
 		return
 	}
+
+	// Check if this is a shell terminal — shells use a simpler streaming path.
+	if shellTerm := s.shells.Get(id); shellTerm != nil {
+		s.handleShellEvents(w, r, shellTerm)
+		return
+	}
+
+	if s.orch == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if _, ok := s.orch.GetJob(id); !ok {
-		http.Error(w, "job not found", http.StatusNotFound)
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -349,6 +388,12 @@ type openPathTarget struct {
 }
 
 func (s *Server) handleKillProcesses(w http.ResponseWriter, r *http.Request) {
+	if s.orch == nil {
+		writeJSON(w, struct {
+			Killed int `json:"killed"`
+		}{Killed: 0})
+		return
+	}
 	killed := 0
 	for _, job := range s.orch.AllJobs() {
 		term := job.Terminal()
@@ -377,6 +422,15 @@ func (s *Server) handleKillProcesses(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleKillTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Check shells first — shell close removes it entirely.
+	if s.shells.Close(id) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if s.orch == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	j, ok := s.orch.GetJob(id)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -399,6 +453,10 @@ func (s *Server) handleKillTerminal(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRerunTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if s.orch == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if _, ok := s.orch.GetJob(id); !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -421,14 +479,18 @@ func (s *Server) handleRerunTerminal(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInputTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	j, ok := s.orch.GetJob(id)
-	if !ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	// Resolve terminal from either jobs or shells.
+	var term *terminal.Terminal
+	if s.orch != nil {
+		if j, ok := s.orch.GetJob(id); ok {
+			term = j.Terminal()
+		}
 	}
-	term := j.Terminal()
 	if term == nil {
-		w.WriteHeader(http.StatusNoContent)
+		term = s.shells.Get(id)
+	}
+	if term == nil {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -451,14 +513,17 @@ func (s *Server) handleInputTerminal(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleResizeTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	j, ok := s.orch.GetJob(id)
-	if !ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	var term *terminal.Terminal
+	if s.orch != nil {
+		if j, ok := s.orch.GetJob(id); ok {
+			term = j.Terminal()
+		}
 	}
-	term := j.Terminal()
 	if term == nil {
-		w.WriteHeader(http.StatusNoContent)
+		term = s.shells.Get(id)
+	}
+	if term == nil {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -476,12 +541,16 @@ func (s *Server) handleResizeTerminal(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClearBuffer(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	j, ok := s.orch.GetJob(id)
-	if !ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	var term *terminal.Terminal
+	if s.orch != nil {
+		if j, ok := s.orch.GetJob(id); ok {
+			term = j.Terminal()
+		}
 	}
-	if term := j.Terminal(); term != nil {
+	if term == nil {
+		term = s.shells.Get(id)
+	}
+	if term != nil {
 		term.ClearBuffer()
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -508,7 +577,7 @@ func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, err := resolveOpenPathTarget(s.orch.WorkDir(), req.Path)
+	target, err := resolveOpenPathTarget(s.workDir, req.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -518,6 +587,270 @@ func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- shell handlers ---
+
+func (s *Server) handleCreateShell(w http.ResponseWriter, r *http.Request) {
+	var profile *settings.ShellProfile
+
+	// Accept optional profile ID in request body.
+	var req struct {
+		ProfileID string `json:"profile_id"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decodeJSON(w, r, &req); err == nil && req.ProfileID != "" {
+			cfg, err := settings.Load()
+			if err == nil {
+				if p, ok := settings.FindProfile(cfg.Shells, req.ProfileID); ok {
+					profile = &p
+				}
+			}
+		}
+	}
+
+	// If no profile specified, use the default from settings.
+	if profile == nil {
+		cfg, err := settings.Load()
+		if err == nil && len(cfg.Shells) > 0 {
+			p, _ := settings.DefaultShellProfile(cfg.Shells)
+			profile = &p
+		}
+	}
+
+	info, err := s.shells.Create(s.appCtx, profile)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, info)
+}
+
+func (s *Server) handleCloseShell(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.shells.Close(id) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetShellProfiles(w http.ResponseWriter, r *http.Request) {
+	cfg, err := settings.Load()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	profiles := cfg.Shells
+	if profiles == nil {
+		// First load: auto-detect and persist.
+		profiles = settings.DetectShells()
+		cfg.Shells = profiles
+		if saveErr := settings.Save(cfg); saveErr != nil {
+			log.Printf("[server] failed to save detected shell profiles: %v", saveErr)
+		}
+	}
+	writeJSON(w, profiles)
+}
+
+func (s *Server) handleSaveShellProfiles(w http.ResponseWriter, r *http.Request) {
+	var profiles []settings.ShellProfile
+	if err := decodeJSON(w, r, &profiles); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	cfg, err := settings.Load()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	cfg.Shells = profiles
+	if err := settings.Save(cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDetectShells(w http.ResponseWriter, r *http.Request) {
+	profiles := settings.DetectShells()
+	writeJSON(w, profiles)
+}
+
+// handleGetSettings returns the full settings object (excluding shells, which have their own endpoint).
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	cfg, err := settings.Load()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Return only the relevant fields for the UI.
+	resp := struct {
+		FontFamily      string `json:"fontFamily"`
+		FontSize        int    `json:"fontSize"`
+		Theme           string `json:"theme"`
+		BackgroundImage string `json:"backgroundImage"`
+	}{
+		FontFamily:      cfg.FontFamily,
+		FontSize:        cfg.FontSize,
+		Theme:           cfg.Theme,
+		BackgroundImage: cfg.BackgroundImage,
+	}
+	writeJSON(w, resp)
+}
+
+// handleSaveSettings updates general settings (font, etc.).
+func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		FontFamily      string `json:"fontFamily"`
+		FontSize        int    `json:"fontSize"`
+		Theme           string `json:"theme"`
+		BackgroundImage string `json:"backgroundImage"`
+	}
+	if err := decodeJSON(w, r, &payload); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	cfg, err := settings.Load()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	cfg.FontFamily = payload.FontFamily
+	cfg.FontSize = payload.FontSize
+	cfg.Theme = payload.Theme
+	cfg.BackgroundImage = payload.BackgroundImage
+	if err := settings.Save(cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListCustomThemes returns JSON themes from ~/.config/vortex/themes/*.json.
+func (s *Server) handleListCustomThemes(w http.ResponseWriter, r *http.Request) {
+	dir, err := settings.UserConfigDir()()
+	if err != nil {
+		writeJSON(w, []any{})
+		return
+	}
+	themesDir := filepath.Join(dir, "vortex", "themes")
+	entries, err := os.ReadDir(themesDir)
+	if err != nil {
+		writeJSON(w, []any{})
+		return
+	}
+
+	type customTheme struct {
+		ID   string          `json:"id"`
+		Data json.RawMessage `json:"data"`
+	}
+
+	var themes []customTheme
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(themesDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		// Validate it's valid JSON
+		if !json.Valid(data) {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		themes = append(themes, customTheme{ID: id, Data: data})
+	}
+	if themes == nil {
+		themes = []customTheme{}
+	}
+	writeJSON(w, themes)
+}
+
+// handleSaveCustomTheme saves a custom theme JSON to ~/.config/vortex/themes/<id>.json.
+func (s *Server) handleSaveCustomTheme(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		ID   string          `json:"id"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := decodeJSON(w, r, &payload); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if payload.ID == "" || !json.Valid(payload.Data) {
+		http.Error(w, "invalid theme", http.StatusBadRequest)
+		return
+	}
+	// Sanitize ID to prevent path traversal
+	if strings.Contains(payload.ID, "/") || strings.Contains(payload.ID, "\\") || strings.Contains(payload.ID, "..") {
+		http.Error(w, "invalid theme id", http.StatusBadRequest)
+		return
+	}
+
+	dir, err := settings.UserConfigDir()()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	themesDir := filepath.Join(dir, "vortex", "themes")
+	if err := os.MkdirAll(themesDir, 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	path := filepath.Join(themesDir, payload.ID+".json")
+	if err := os.WriteFile(path, payload.Data, 0o644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+// handleShellEvents is the SSE stream for a shell terminal. Simpler than job
+// events — no orchestrator restart logic, just stream until the shell exits or
+// the client disconnects.
+func (s *Server) handleShellEvents(w http.ResponseWriter, r *http.Request, term *terminal.Terminal) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+
+	chunks, ch, cancel := term.OutputAndSubscribe()
+	defer cancel()
+
+	for _, chunk := range chunks {
+		writeSSEChunk(w, chunk)
+	}
+	flusher.Flush()
+
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case line, open := <-ch:
+			if !open {
+				fmt.Fprintf(w, "event: exit\ndata: done\n\n")
+				flusher.Flush()
+				return
+			}
+			writeSSEChunk(w, line)
+			flusher.Flush()
+		}
+	}
 }
 
 // --- static SPA helper ---

@@ -595,6 +595,27 @@ func (o *Orchestrator) collectDownstreamLocked(id string) map[string]struct{} {
 	return affected
 }
 
+// KillOnCloseJobs kills all running jobs that have kill_on_close: true in their
+// spec. Called when the GUI window is closed (detach model).
+func (o *Orchestrator) KillOnCloseJobs() {
+	o.mu.RLock()
+	var terms []*terminal.Terminal
+	for _, id := range o.order {
+		job := o.jobs[id]
+		if !job.Spec().ShouldKillOnClose() {
+			continue
+		}
+		if term := job.Terminal(); term != nil && term.PID() != 0 {
+			terms = append(terms, term)
+		}
+	}
+	o.mu.RUnlock()
+
+	for _, term := range terms {
+		term.Kill()
+	}
+}
+
 // Shutdown gracefully stops every running process managed by this orchestrator.
 // It first sends SIGTERM (on Unix) and waits up to 5 seconds, then force-kills
 // any processes that haven't exited.

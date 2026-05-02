@@ -63,6 +63,20 @@ func TestJobSpecCommandLineWithShell(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsGroupNameWithAtPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dev.vortex")
+	data := []byte("name: dev\njobs:\n  - id: smoke\n    command: echo ok\n    group: \"@settings\"\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !contains(err.Error(), "must not start with '@'") {
+		t.Fatalf("Load() error = %v, want group name rejection", err)
+	}
+}
+
 func TestLoadRejectsUnsupportedShell(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dev.vortex")

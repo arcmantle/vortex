@@ -4,20 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
-
-export interface TerminalInfo {
-	id: string;
-	label: string;
-	command: string;
-	group: string;
-	needs: string[];
-	status: 'pending' | 'running' | 'success' | 'failure' | 'skipped';
-}
-
-export interface LineDTO {
-	t: number;
-	data: string;
-}
+import type { TerminalInfo } from '../types.js';
 
 // Always use relative URLs so Vite's proxy (in dev) or the embedded server (in prod)
 // handles routing. Never hardcode the Go server address from the browser.
@@ -58,37 +45,88 @@ export class VortexTerminal extends LitElement {
 				grid-template-rows: 1fr;
 				min-height: 0;
 				overflow: hidden;
-				background: #1e1e1e;
+				background: var(--vx-surface-0);
+				position: relative;
 			}
 			.term-wrap {
 				min-height: 0;
 				overflow: hidden;
+			}
+			::-webkit-scrollbar { width: 8px; height: 8px; }
+			::-webkit-scrollbar-track { background: transparent; }
+			::-webkit-scrollbar-thumb { background: var(--vx-scrollbar-thumb); border-radius: 4px; }
+			::-webkit-scrollbar-thumb:hover { background: var(--vx-scrollbar-thumb-hover); }
+			::-webkit-scrollbar-corner { background: transparent; }
+
+			.panel-toolbar {
+				position: absolute;
+				top: 8px;
+				right: 12px;
+				z-index: 10;
+				display: inline-grid;
+				grid-auto-flow: column;
+				gap: 8px;
+				padding: 6px;
+				border: 1px solid var(--vx-border-strong);
+				border-radius: 999px;
+				background: var(--vx-surface-1);
+				box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+			}
+			.toolbar-btn {
+				width: 28px;
+				height: 28px;
+				border-radius: 50%;
+				border: 1px solid var(--vx-border-strong);
+				background: var(--vx-surface-3);
+				color: var(--vx-text-secondary);
+				cursor: pointer;
+				display: grid;
+				place-items: center;
+				opacity: 0.6;
+				transition: opacity 0.15s, background 0.15s;
+			}
+			.toolbar-btn:hover {
+				opacity: 1;
+				background: var(--vx-surface-5);
+			}
+			.toolbar-btn svg {
+				width: 14px;
+				height: 14px;
+				fill: currentColor;
 			}
 		`,
 	];
 
 	@property({ type: Object }) terminal!: TerminalInfo;
 	@property({ type: String }) token = '';
+	@property({ type: String }) fontFamily = '';
+	@property({ type: Number }) fontSize = 0;
+	@property({ type: Boolean }) showToolbar = false;
 
 	private _term?: Terminal;
 	private _fitAddon?: FitAddon;
 	private _sse?: EventSource;
+	private _sseAbort?: AbortController;
 	private _ro?: ResizeObserver;
 	private _inputDisposable?: { dispose(): void; };
 	private _contextMenuHandler?: (e: MouseEvent) => void;
+	private _themeHandler?: () => void;
 	private _lastReportedSize = '';
 	private _sseErrorShown = false;
+	private _sseInitial = true;
+	private _replayWindow = false;
+	private _replayTimer?: ReturnType<typeof setTimeout>;
 
 	protected firstUpdated(): void {
 		const wrap = this.shadowRoot!.querySelector('.term-wrap') as HTMLElement;
 
 		this._fitAddon = new FitAddon();
 		this._term = new Terminal({
-			theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+			theme: this._buildXtermTheme(),
 			convertEol: false,
 			scrollback: 10_000,
-			fontFamily: 'Consolas, "Courier New", monospace',
-			fontSize: 13,
+			fontFamily: this.fontFamily || 'Consolas, "Courier New", monospace',
+			fontSize: this.fontSize || 13,
 			rightClickSelectsWord: true,
 		});
 		this._term.loadAddon(new WebLinksAddon((_event, uri) => {
@@ -142,13 +180,19 @@ export class VortexTerminal extends LitElement {
 		});
 		this._ro.observe(this);
 
+		// Listen for theme changes from ThemeManager
+		this._themeHandler = () => this.reapplyTheme();
+		this.getRootNode().addEventListener('vx-theme-changed', this._themeHandler);
+
 		this._connectSSE();
 	}
 
 	protected updated(changed: PropertyValues): void {
 		if (changed.has('terminal')) {
 			const prev = changed.get('terminal') as TerminalInfo | undefined;
-			if (prev?.id !== this.terminal?.id) {
+			// Skip when prev is undefined — that's the initial property assignment
+			// which firstUpdated() already handles by connecting SSE.
+			if (prev && prev.id !== this.terminal?.id) {
 				this._term?.reset();
 				this._lastReportedSize = '';
 				this._sseErrorShown = false;
@@ -157,19 +201,48 @@ export class VortexTerminal extends LitElement {
 				void this._reportSize();
 			}
 		}
+		if (changed.has('fontFamily') || changed.has('fontSize')) {
+			if (this._term) {
+				if (this.fontFamily) this._term.options.fontFamily = this.fontFamily;
+				if (this.fontSize) this._term.options.fontSize = this.fontSize;
+				this._fitAddon?.fit();
+			}
+		}
+	}
+
+	connectedCallback(): void {
+		super.connectedCallback();
+		// Re-attach DOM-dependent observers on reattach (e.g. cache directive).
+		// SSE + input stay alive while detached so no reset/replay is needed.
+		if (this._term) {
+			if (!this._ro) {
+				this._ro = new ResizeObserver(() => {
+					this._fitAddon?.fit();
+					void this._reportSize();
+				});
+				this._ro.observe(this);
+			}
+			if (!this._themeHandler) {
+				this._themeHandler = () => this.reapplyTheme();
+				this.getRootNode().addEventListener('vx-theme-changed', this._themeHandler);
+			}
+			if (!this._sse && this.terminal) {
+				this._connectSSE();
+			}
+			requestAnimationFrame(() => this._fitAddon?.fit());
+		}
 	}
 
 	disconnectedCallback(): void {
 		super.disconnectedCallback();
+		// Only detach DOM-dependent observers. SSE + input remain alive so the
+		// xterm buffer stays current for flicker-free reattach.
 		this._ro?.disconnect();
-		this._disconnectSSE();
-		this._inputDisposable?.dispose();
-		this._inputDisposable = undefined;
-		if (this._contextMenuHandler) {
-			this.shadowRoot?.querySelector('.term-wrap')?.removeEventListener('contextmenu', this._contextMenuHandler as EventListener);
-			this._contextMenuHandler = undefined;
+		this._ro = undefined;
+		if (this._themeHandler) {
+			this.getRootNode().removeEventListener('vx-theme-changed', this._themeHandler);
+			this._themeHandler = undefined;
 		}
-		this._term?.dispose();
 	}
 
 	private _connectSSE(): void {
@@ -177,49 +250,118 @@ export class VortexTerminal extends LitElement {
 		const params = new URLSearchParams({ id: this.terminal.id });
 		if (this.token) params.set('token', this.token);
 		const url = `${API_BASE}/events?${params.toString()}`;
+		this._sseInitial = true;
+		this._replayWindow = true;
+		clearTimeout(this._replayTimer);
+		// AbortController ensures all listeners are removed atomically on disconnect,
+		// preventing stale callbacks from firing after close().
+		this._sseAbort = new AbortController();
+		const { signal } = this._sseAbort;
 		this._sse = new EventSource(url);
-		this._sse.onopen = () => {
-			// Reset the terminal on (re)connection so that the full server-side
-			// replay does not duplicate already-displayed output.
-			this._term?.reset();
+		this._sse.addEventListener('open', () => {
+			// On auto-reconnect (network blip) the server replays the full buffer,
+			// so we must reset to avoid duplicates. On the *initial* connect the
+			// terminal is already in the correct state (empty or pre-reset by
+			// the updated() handler), so skip the reset to avoid a visible flash.
+			if (!this._sseInitial) {
+				this._term?.reset();
+				this._replayWindow = true;
+			}
+			this._sseInitial = false;
 			this._sseErrorShown = false;
-		};
-		this._sse.onmessage = (e) => {
+			// Suppress CSI responses (CPR, DA) generated by xterm.js during replay.
+			// Use a debounce: as long as messages keep arriving, we're still replaying.
+			// Once messages stop for 200ms, the replay is done and live responses pass.
+			clearTimeout(this._replayTimer);
+			this._replayTimer = setTimeout(() => { this._replayWindow = false; }, 200);
+		}, { signal });
+		this._sse.addEventListener('message', (e) => {
+			// Reset the replay debounce on each message — large replays can exceed
+			// a fixed timeout, so we keep the window open while data flows.
+			if (this._replayWindow) {
+				clearTimeout(this._replayTimer);
+				this._replayTimer = setTimeout(() => { this._replayWindow = false; }, 200);
+			}
 			try {
-				const chunk = JSON.parse(e.data) as LineDTO;
-				this._term?.write(decodeBase64(chunk.data));
+				const decoded = decodeBase64((JSON.parse(e.data) as { data: string }).data);
+				this._batchWrite(decoded);
 			} catch { /* ignore corrupt frame */ }
-			this._sseErrorShown = false;
-		};
+		}, { signal });
 		// The server keeps the SSE stream open across process restarts.
 		// "exit" means the process exited, but the stream stays alive —
 		// new output will arrive when the job restarts.
 		this._sse.addEventListener('exit', () => {
 			// Server already appended [process exited] to the buffer.
-		});
+		}, { signal });
 		this._sse.addEventListener('skipped', () => {
 			this._term?.write('\r\n\x1b[33m[job was skipped]\x1b[0m\r\n');
-		});
+		}, { signal });
 		this._sse.addEventListener('failure', () => {
 			this._term?.write('\r\n\x1b[31m[job failed to start]\x1b[0m\r\n');
-		});
-		this._sse.onerror = () => {
+		}, { signal });
+		this._sse.addEventListener('error', () => {
 			if (!this._sseErrorShown) {
 				this._sseErrorShown = true;
 				this._term?.write('\r\n\x1b[31m[connection lost]\x1b[0m\r\n');
 			}
-		};
+		}, { signal });
 	}
 
 	private _disconnectSSE(): void {
+		this._sseAbort?.abort();
+		this._sseAbort = undefined;
 		this._sse?.close();
 		this._sse = undefined;
+	}
+
+	/** Write terminal output. xterm.js handles internal batching. */
+	private _batchWrite(data: Uint8Array): void {
+		if (data.length === 0) return;
+		this._term?.write(data);
 	}
 
 	private _authHeaders(): HeadersInit {
 		const headers: HeadersInit = {};
 		if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
 		return headers;
+	}
+
+	private _buildXtermTheme(): Record<string, string> {
+		const s = getComputedStyle(this);
+		const v = (name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback;
+		return {
+			background: v('--vx-surface-0', '#1e1e1e'),
+			foreground: v('--vx-text-primary', '#d4d4d4'),
+			cursor: v('--vx-text-primary', '#d4d4d4'),
+			cursorAccent: v('--vx-surface-0', '#1e1e1e'),
+			selectionBackground: v('--vx-accent-muted', '#094771'),
+			scrollbarSliderBackground: v('--vx-scrollbar-thumb', '#42424280'),
+			scrollbarSliderHoverBackground: v('--vx-scrollbar-thumb-hover', '#555555b3'),
+			scrollbarSliderActiveBackground: v('--vx-scrollbar-thumb-active', '#666666cc'),
+			black: v('--vx-ansi-black', '#1e1e1e'),
+			red: v('--vx-ansi-red', '#f14c4c'),
+			green: v('--vx-ansi-green', '#23d18b'),
+			yellow: v('--vx-ansi-yellow', '#f5f543'),
+			blue: v('--vx-ansi-blue', '#3b8eea'),
+			magenta: v('--vx-ansi-magenta', '#d670d6'),
+			cyan: v('--vx-ansi-cyan', '#29b8db'),
+			white: v('--vx-ansi-white', '#cccccc'),
+			brightBlack: v('--vx-ansi-bright-black', '#666666'),
+			brightRed: v('--vx-ansi-bright-red', '#f14c4c'),
+			brightGreen: v('--vx-ansi-bright-green', '#23d18b'),
+			brightYellow: v('--vx-ansi-bright-yellow', '#f5f543'),
+			brightBlue: v('--vx-ansi-bright-blue', '#3b8eea'),
+			brightMagenta: v('--vx-ansi-bright-magenta', '#d670d6'),
+			brightCyan: v('--vx-ansi-bright-cyan', '#29b8db'),
+			brightWhite: v('--vx-ansi-bright-white', '#ffffff'),
+		};
+	}
+
+	/** Re-apply terminal theme from current CSS variables. Call when theme changes. */
+	reapplyTheme(): void {
+		if (this._term) {
+			this._term.options.theme = this._buildXtermTheme();
+		}
 	}
 
 	/** Clear the terminal display and the server-side buffer. */
@@ -272,6 +414,17 @@ export class VortexTerminal extends LitElement {
 
 	private async _sendInput(data: string): Promise<void> {
 		if (!this.terminal || data.length === 0) return;
+		// Filter out terminal query responses generated by xterm.js.
+		// OSC/DCS replies are always noise (unsolicited). CSI responses (CPR, DA)
+		// are only noise during the replay window — during live interaction the
+		// shell actively expects them (e.g. zsh reverse-i-search uses \x1b[6n).
+		if (data.charCodeAt(0) === 0x1b) {
+			const c = data.charCodeAt(1);
+			// OSC (\x1b]) or DCS (\x1bP) — always suppress
+			if (c === 0x5d || c === 0x50) return;
+			// CSI responses: DA (\x1b[?...c) or CPR (\x1b[...R) — suppress during replay only
+			if (this._replayWindow && c === 0x5b && /^\x1b\[[\?0-9;]*[Rcn]$/.test(data)) return;
+		}
 
 		try {
 			await fetch(`${API_BASE}/api/terminals/${encodeURIComponent(this.terminal.id)}/input`, {
@@ -284,8 +437,23 @@ export class VortexTerminal extends LitElement {
 		}
 	}
 
+	private _fireToolbarEvent(type: string): void {
+		this.dispatchEvent(new CustomEvent(type, { detail: { id: this.terminal.id }, bubbles: true, composed: true }));
+	}
+
 	render() {
-		return html`<div class="term-wrap"></div>`;
+		return html`
+			${this.showToolbar ? html`
+				<div class="panel-toolbar">
+					${this.terminal.status === 'running' || this.terminal.status === 'pending'
+						? html`<button class="toolbar-btn" @click=${() => this._fireToolbarEvent('terminal-stop')} title="Stop process"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1"/></svg></button>`
+						: html`<button class="toolbar-btn" @click=${() => this._fireToolbarEvent('terminal-rerun')} title="Start process"><svg viewBox="0 0 16 16"><path d="M4.5 2.5v11l9-5.5z"/></svg></button>`}
+					<button class="toolbar-btn" @click=${() => this._fireToolbarEvent('terminal-rerun')} title="Rerun this job and downstream dependent jobs"><svg viewBox="0 0 16 16"><path d="M13.5 2v4h-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.15 5.97A5.5 5.5 0 1 1 7.5 2.5c1.58 0 3.02.67 4.03 1.74L13.5 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+					<button class="toolbar-btn" @click=${() => void this.clearOutput()} title="Clear terminal"><svg viewBox="0 0 16 16"><path d="M2 2l12 12M14 2L2 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+				</div>
+			` : ''}
+			<div class="term-wrap"></div>
+		`;
 	}
 }
 

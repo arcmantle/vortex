@@ -19,7 +19,7 @@ node:
         const result = spawnSync(name, args, { stdio: 'inherit' })
         if (result.status !== 0) {
           console.error(`command failed: ${name} (exit ${result.status})`)
-          process.exit(1)
+          process.exit(1);
         }
       }
     logBanner: |

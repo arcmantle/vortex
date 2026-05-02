@@ -6,6 +6,31 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
+## Install
+
+Download and run the installer for your platform from [GitHub Releases](https://github.com/arcmantle/vortex/releases/latest):
+
+**macOS / Linux:**
+
+```sh
+curl -fsSL https://github.com/arcmantle/vortex/releases/latest/download/vortex-install-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m) -o vortex-install
+chmod +x vortex-install
+./vortex-install
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://github.com/arcmantle/vortex/releases/latest/download/vortex-install-windows-amd64.exe -OutFile vortex-install.exe
+.\vortex-install.exe
+```
+
+**Update an existing install:**
+
+```sh
+vortex upgrade
+```
+
 ## What Is Vortex?
 
 Vortex lets you define a set of tasks (called **jobs**) in a simple YAML file and run them all at once. Each job gets its own live terminal panel in a desktop window, so you can watch logs, errors, and output in real time.
@@ -433,8 +458,8 @@ The Vite dev server proxies API calls to the Go backend. Use `--dev` to skip the
 # Build the frontend
 cd cmd/vortex-ui/web && pnpm install && pnpm build && cd ../../..
 
-# Build the Go binary with embedded UI
-go build -tags embed_ui -o vortex ./cmd/vortex
+# Build the Go binary (UI is embedded by default)
+go build -o vortex ./cmd/vortex
 ```
 
 <details>
@@ -443,7 +468,7 @@ go build -tags embed_ui -o vortex ./cmd/vortex
 On Windows, add `-ldflags "-H=windowsgui"` to build a GUI binary that doesn't keep a console window open:
 
 ```sh
-go build -tags embed_ui -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
+go build -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
 ```
 
 CLI commands (`help`, `version`, `config`, etc.) still work from the terminal — Vortex reattaches to the parent console when needed.
@@ -455,7 +480,7 @@ chmod +x ./vortex-darwin-arm64
 xattr -d com.apple.quarantine ./vortex-darwin-arm64 2>/dev/null || true
 ```
 
-The `embed_ui` build tag embeds the compiled frontend into the binary. Without it, the UI is not served (useful for dev mode).
+The UI is embedded by default. To build without it (e.g. for the two-stage release process), use `-tags no_embed_ui`.
 
 </details>
 

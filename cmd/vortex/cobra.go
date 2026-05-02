@@ -12,10 +12,11 @@ import (
 
 func rootCommand() *cobra.Command {
 	var versionFlag bool
+	var bareOpts cliOptions
 
 	cmd := &cobra.Command{
 		Use:           "vortex",
-		Short:         "Run Vortex jobs and manage named instances",
+		Short:         "Terminal manager and job runner",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
@@ -27,14 +28,20 @@ func rootCommand() *cobra.Command {
 				printVersion()
 				return nil
 			}
-			return cmd.Help()
+			return runBareMode(bareOpts)
 		},
 	}
 
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "Show the current version")
+	cmd.Flags().BoolVar(&bareOpts.dev, "dev", false, "Development mode (no native webview)")
+	cmd.Flags().BoolVar(&bareOpts.headless, "headless", false, "Run without opening the native webview")
+	cmd.Flags().IntVar(&bareOpts.port, "port", 0, "Override the HTTP port (default 7370)")
+	cmd.Flags().BoolVar(&bareOpts.forked, "forked", false, "internal")
+	_ = cmd.Flags().MarkHidden("forked")
 
 	cmd.AddCommand(runCommand())
+	cmd.AddCommand(stopCommand())
 	cmd.AddCommand(configCommand())
 	cmd.AddCommand(instanceCommand())
 	cmd.AddCommand(favoriteCommand())
@@ -198,6 +205,27 @@ func upgradeCommand() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "Show whether a newer release is available without installing it")
+	return cmd
+}
+
+func stopCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "stop [name]",
+		Short: "Stop a running Vortex instance",
+		Long:  "Stop a running Vortex instance. With no name, stops the default singleton.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := bareInstanceName
+			if len(args) == 1 {
+				name = args[0]
+			}
+			identity, err := instance.NewIdentity(name)
+			if err != nil {
+				return err
+			}
+			return runQuitCommand(identity)
+		},
+	}
 	return cmd
 }
 

@@ -69,16 +69,21 @@ type JobSpec struct {
 	// Defaults to true. Set to false for long-running processes (e.g. dev
 	// servers) that should survive across config reloads.
 	Restart *bool `yaml:"restart"`
+	// KillOnClose controls whether this job is killed when the GUI window is
+	// closed. Defaults to false. Useful for dev servers that should only run
+	// while the user is actively watching.
+	KillOnClose *bool `yaml:"kill_on_close"`
 }
 
 type rawJobSpec struct {
-	ID      string   `yaml:"id"`
-	Label   string   `yaml:"label"`
-	Use     string   `yaml:"use"`
-	Group   string   `yaml:"group"`
-	Needs   []string `yaml:"needs"`
-	If      string   `yaml:"if"`
-	Restart *bool    `yaml:"restart"`
+	ID          string   `yaml:"id"`
+	Label       string   `yaml:"label"`
+	Use         string   `yaml:"use"`
+	Group       string   `yaml:"group"`
+	Needs       []string `yaml:"needs"`
+	If          string   `yaml:"if"`
+	Restart     *bool    `yaml:"restart"`
+	KillOnClose *bool    `yaml:"kill_on_close"`
 }
 
 // UnmarshalYAML accepts either a plain string or an OS-keyed object for the
@@ -99,15 +104,16 @@ func (j *JobSpec) UnmarshalYAML(node *yaml.Node) error {
 	}
 
 	*j = JobSpec{
-		ID:      raw.ID,
-		Label:   raw.Label,
-		Use:     raw.Use,
-		Shell:   shell,
-		Command: command,
-		Group:   raw.Group,
-		Needs:   raw.Needs,
-		If:      raw.If,
-		Restart: raw.Restart,
+		ID:          raw.ID,
+		Label:       raw.Label,
+		Use:         raw.Use,
+		Shell:       shell,
+		Command:     command,
+		Group:       raw.Group,
+		Needs:       raw.Needs,
+		If:          raw.If,
+		Restart:     raw.Restart,
+		KillOnClose: raw.KillOnClose,
 	}
 	return nil
 }
@@ -116,6 +122,12 @@ func (j *JobSpec) UnmarshalYAML(node *yaml.Node) error {
 // restart. Defaults to true when the field is not set.
 func (j JobSpec) ShouldRestart() bool {
 	return j.Restart == nil || *j.Restart
+}
+
+// ShouldKillOnClose returns whether this job should be killed when the GUI
+// window is closed. Defaults to false when the field is not set.
+func (j JobSpec) ShouldKillOnClose() bool {
+	return j.KillOnClose != nil && *j.KillOnClose
 }
 
 // DisplayCommand returns the human-readable command shown in the UI.
@@ -293,6 +305,9 @@ func Load(path string) (*Config, error) {
 		seen[j.ID] = struct{}{}
 		if err := cfg.validateJobSpec(*j); err != nil {
 			return nil, fmt.Errorf("job %q: %w", j.ID, err)
+		}
+		if strings.HasPrefix(j.Group, "@") {
+			return nil, fmt.Errorf("job %q: group name %q must not start with '@' (reserved for system views)", j.ID, j.Group)
 		}
 		if _, _, err := j.CommandLine(); err != nil {
 			return nil, fmt.Errorf("job %q: %w", j.ID, err)

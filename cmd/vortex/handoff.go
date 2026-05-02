@@ -41,11 +41,20 @@ func handoffHandler(
 
 		default:
 			handleRestart(ctx, identity, orch, payload)
+			// After reloading config, surface the UI so the user sees the result.
+			select {
+			case showUIRequests <- struct{}{}:
+			default:
+			}
 		}
 	}
 }
 
 func handleRerun(ctx context.Context, identity instance.Identity, orch *orchestrator.Orchestrator, payload instance.HandoffPayload) {
+	if orch == nil {
+		log.Printf("Ignoring rerun for %q: no orchestrator (bare mode)", identity.DisplayName)
+		return
+	}
 	if len(payload.Args) != 1 || strings.TrimSpace(payload.Args[0]) == "" {
 		log.Printf("Ignoring rerun for %q: missing job id", identity.DisplayName)
 		return
@@ -74,6 +83,10 @@ func handleHideUI(identity instance.Identity, ui *uiLifecycle, opts cliOptions) 
 }
 
 func handleRestart(ctx context.Context, identity instance.Identity, orch *orchestrator.Orchestrator, payload instance.HandoffPayload) {
+	if orch == nil {
+		log.Printf("Ignoring restart handoff for %q: no orchestrator (bare mode)", identity.DisplayName)
+		return
+	}
 	log.Printf("Received restart handoff for %q with args: %v", identity.DisplayName, payload.Args)
 	handoffCfg, handoffConfigPath, err := loadConfigFile(payload.ConfigFile, nil)
 	if err != nil {

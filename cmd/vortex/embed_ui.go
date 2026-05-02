@@ -1,4 +1,4 @@
-//go:build embed_ui
+//go:build !no_embed_ui
 
 package main
 

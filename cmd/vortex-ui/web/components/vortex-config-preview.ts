@@ -11,22 +11,30 @@ export class VortexConfigPreview extends LitElement {
     :host {
       display: grid;
       grid-template-rows: auto 1fr;
-      background: #1e1e1e;
+      background: var(--vx-surface-0);
       overflow: hidden;
     }
+
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--vx-scrollbar-thumb); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--vx-scrollbar-thumb-hover); }
+    ::-webkit-scrollbar-corner { background: transparent; }
 
     .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 12px;
-      background: #252526;
-      border-bottom: 1px solid #3c3c3c;
+      padding: 0 12px;
+      height: 33px;
+      box-sizing: border-box;
+      background: var(--vx-surface-1);
+      border-bottom: 1px solid var(--vx-border-default);
     }
 
     .path {
       font-size: 12px;
-      color: #999;
+      color: var(--vx-text-muted);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -42,15 +50,15 @@ export class VortexConfigPreview extends LitElement {
 
     .actions button {
       padding: 4px 10px;
-      border: 1px solid #555;
+      border: 1px solid var(--vx-border-strong);
       border-radius: 4px;
-      background: #333;
-      color: #ccc;
+      background: var(--vx-surface-3);
+      color: var(--vx-text-secondary);
       font-size: 12px;
       cursor: pointer;
     }
     .actions button:hover {
-      background: #444;
+      background: var(--vx-surface-5);
     }
 
     .editor {

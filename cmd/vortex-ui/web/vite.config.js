@@ -1,6 +1,25 @@
 import { defineConfig } from 'vite';
+import { spawn } from 'child_process';
+
+function goBackend() {
+	let proc;
+	return {
+		name: 'go-backend',
+		configureServer() {
+			proc = spawn('go', ['run', './cmd/vortex', 'run', '--dev', '--port', '7370', '--config', 'mock/dev.vortex'], {
+				cwd: new URL('../../../', import.meta.url).pathname,
+				stdio: 'inherit',
+			});
+			proc.on('error', (err) => console.error('[go-backend]', err.message));
+		},
+		buildEnd() {
+			proc?.kill();
+		},
+	};
+}
 
 export default defineConfig({
+	plugins: [goBackend()],
 	build: {
 		outDir: '../../../cmd/vortex/web/dist',
 		emptyOutDir: true,

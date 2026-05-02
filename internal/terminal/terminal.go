@@ -4,6 +4,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -76,6 +77,15 @@ func (b *outputBuffer) clear() {
 	b.totalBytes = 0
 }
 
+// containsClearScreen reports whether data contains an ANSI sequence that
+// clears the full screen. Common sequences emitted by "clear" or Ctrl-L:
+//   - \x1b[2J   (erase entire display)
+//   - \x1b[3J   (erase scrollback buffer)
+func containsClearScreen(data []byte) bool {
+	return bytes.Contains(data, []byte("\x1b[2J")) ||
+		bytes.Contains(data, []byte("\x1b[3J"))
+}
+
 type resizeFunc func(cols, rows uint16) error
 type inputFunc func([]byte) error
 
@@ -95,10 +105,10 @@ type childTransport interface {
 }
 
 type startedChildProcess struct {
-	stream    io.ReadCloser
-	process   processHandle
-	input     inputFunc
-	resize    resizeFunc
+	stream  io.ReadCloser
+	process processHandle
+	input   inputFunc
+	resize  resizeFunc
 	// signalEOF, if non-nil, is called after the process exits to unblock the
 	// stream reader. On Windows this closes the PseudoConsole (without closing
 	// the reader) so the ConPTY output pipe delivers its remaining data and
@@ -308,6 +318,12 @@ func (t *Terminal) appendChunk(ts time.Time, data []byte) {
 
 	chunk := OutputChunk{T: ts, Data: append([]byte(nil), data...)}
 	t.mu.Lock()
+	// If this chunk contains a full screen-clear sequence, discard older
+	// buffered output. Replaying pre-clear content only causes a visible
+	// flash for newly connecting clients.
+	if containsClearScreen(data) {
+		t.outputBuf.clear()
+	}
 	t.outputBuf.add(chunk)
 	for _, ch := range t.subs {
 		select {

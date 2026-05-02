@@ -9,8 +9,13 @@ import (
 )
 
 type Settings struct {
-	Editor  string `json:"editor,omitempty"`
-	Browser string `json:"browser,omitempty"`
+	Editor          string         `json:"editor,omitempty"`
+	Browser         string         `json:"browser,omitempty"`
+	Shells          []ShellProfile `json:"shells,omitempty"`
+	FontFamily      string         `json:"fontFamily,omitempty"`
+	FontSize        int            `json:"fontSize,omitempty"`
+	Theme           string         `json:"theme,omitempty"`
+	BackgroundImage string         `json:"backgroundImage,omitempty"`
 }
 
 var userConfigDir = os.UserConfigDir
