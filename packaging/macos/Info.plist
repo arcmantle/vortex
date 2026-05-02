@@ -13,7 +13,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>__VERSION__</string>
 	<key>CFBundleExecutable</key>
-	<string>vortex-launcher</string>
+	<string>vortex-setup</string>
 	<key>CFBundleIconFile</key>
 	<string>vortex</string>
 	<key>CFBundlePackageType</key>

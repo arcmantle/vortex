@@ -12,7 +12,7 @@
 //  4. Launch it — the bootstrap progress UI appears, installs locally, done.
 //
 // Windows:
-//  1. Produces vortex-install-gui.exe with bundled binaries
+//  1. Produces vortex-setup.exe with bundled binaries
 //  2. Launches it — the installer UI appears, installs, done.
 //
 // Usage:
@@ -79,21 +79,17 @@ func doBuild() {
 }
 
 func buildMacOS() {
-	step("Building vortex-bootstrap")
-	goBuild(filepath.Join(workDir, "vortex-bootstrap"), "./cmd/vortex-bootstrap/")
-
-	step("Building vortex-launcher")
-	goBuild(filepath.Join(workDir, "vortex-launcher"), "./cmd/vortex-launcher/")
+	step("Building vortex-setup")
+	goBuild(filepath.Join(workDir, "vortex-setup"), "./cmd/vortex-setup/")
 
 	step("Creating .app bundle")
-	run("./scripts/create-app-bundle.sh",
+	run("go", "run", "scripts/create-app-bundle.go",
 		"--version", "0.0.0-local",
 		"--output", workDir,
-		"--launcher", filepath.Join(workDir, "vortex-launcher"),
-		"--bootstrap", filepath.Join(workDir, "vortex-bootstrap"),
+		"--setup", filepath.Join(workDir, "vortex-setup"),
 	)
 
-	// Embed local binaries inside the bundle so the bootstrap finds them
+	// Embed local binaries inside the bundle so vortex-setup finds them
 	// without needing env vars (works when launched from Finder).
 	localBinDir := filepath.Join(workDir, "Vortex.app", "Contents", "Resources", "local-binaries")
 	must(os.MkdirAll(localBinDir, 0o755))
@@ -102,7 +98,7 @@ func buildMacOS() {
 
 	step("Creating DMG")
 	dmgPath := filepath.Join(workDir, "Vortex.dmg")
-	run("./scripts/create-dmg.sh",
+	run("go", "run", "scripts/create-dmg.go",
 		"--version", "0.0.0-local",
 		"--app-dir", filepath.Join(workDir, "Vortex.app"),
 		"--output", dmgPath,
@@ -113,13 +109,13 @@ func buildMacOS() {
 	info("To test the full flow:")
 	info("  1. Open the DMG (will happen automatically unless --build)")
 	info("  2. Drag Vortex.app to Applications (or anywhere)")
-	info("  3. Launch Vortex.app — bootstrap progress UI will appear")
+	info("  3. Launch Vortex.app — setup progress UI will appear")
 	info("  4. Binaries get installed to ~/.local/bin/")
 }
 
 func buildWindows() {
-	step("Building vortex-install-gui")
-	goBuild(filepath.Join(workDir, binaryName("vortex-install-gui")), "./cmd/vortex-install-gui/")
+	step("Building vortex-setup")
+	goBuild(filepath.Join(workDir, binaryName("vortex-setup")), "./cmd/vortex-setup/")
 
 	// Place binaries where the installer can find them via VORTEX_BOOTSTRAP_LOCAL.
 	binDir := filepath.Join(workDir, "binaries")
@@ -127,7 +123,7 @@ func buildWindows() {
 	must(os.Rename(filepath.Join(workDir, "vortex.exe"), filepath.Join(binDir, "vortex.exe")))
 	must(os.Rename(filepath.Join(workDir, "vortex-window.exe"), filepath.Join(binDir, "vortex-window.exe")))
 
-	success("Installer ready: %s", filepath.Join(workDir, "vortex-install-gui.exe"))
+	success("Installer ready: %s", filepath.Join(workDir, binaryName("vortex-setup")))
 	fmt.Println()
 	info("To test the full flow:")
 	info("  1. Run the installer (will happen automatically unless --build)")
@@ -154,7 +150,7 @@ func doOpen() {
 		info("The bootstrap UI will install vortex to ~/.local/bin/")
 
 	case "windows":
-		installer := filepath.Join(workDir, "vortex-install-gui.exe")
+		installer := filepath.Join(workDir, "vortex-setup.exe")
 		step("Running installer")
 		cmd := exec.Command(installer)
 		cmd.Env = append(os.Environ(), "VORTEX_BOOTSTRAP_LOCAL="+filepath.Join(workDir, "binaries"))

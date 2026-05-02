@@ -10,19 +10,23 @@ A process orchestrator that runs multiple jobs, manages their dependencies, and 
 
 Download and run the installer for your platform from [GitHub Releases](https://github.com/arcmantle/vortex/releases/latest):
 
-**macOS / Linux:**
+**macOS:**
 
-```sh
-curl -fsSL https://github.com/arcmantle/vortex/releases/latest/download/vortex-install-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m) -o vortex-install
-chmod +x vortex-install
-./vortex-install
-```
+Download the DMG from [Releases](https://github.com/arcmantle/vortex/releases/latest), open it, and drag **Vortex** to your Applications folder. On first launch, Vortex will install the required binaries automatically.
 
-**Windows (PowerShell):**
+**Windows:**
 
 ```powershell
-irm https://github.com/arcmantle/vortex/releases/latest/download/vortex-install-windows-amd64.exe -OutFile vortex-install.exe
-.\vortex-install.exe
+irm https://github.com/arcmantle/vortex/releases/latest/download/vortex-setup-windows-amd64.exe -OutFile vortex-setup.exe
+.\vortex-setup.exe
+```
+
+**Linux:**
+
+```sh
+curl -fsSL https://github.com/arcmantle/vortex/releases/latest/download/vortex-setup-linux-amd64 -o vortex-setup
+chmod +x vortex-setup
+./vortex-setup
 ```
 
 **Update an existing install:**

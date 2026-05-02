@@ -52,29 +52,25 @@ jobs:
             goarch: amd64
             binary: vortex-windows-amd64.exe
             window_binary: vortex-window-windows-amd64.exe
-            install_binary: vortex-install-windows-amd64.exe
-            gui_install_binary: vortex-install-gui-windows-amd64.exe
+            setup_binary: vortex-setup-windows-amd64.exe
           - os: windows-latest
             goos: windows
             goarch: arm64
             binary: vortex-windows-arm64.exe
             window_binary: vortex-window-windows-arm64.exe
-            install_binary: vortex-install-windows-arm64.exe
-            gui_install_binary: vortex-install-gui-windows-arm64.exe
+            setup_binary: vortex-setup-windows-arm64.exe
           - os: ubuntu-22.04
             goos: linux
             goarch: amd64
             binary: vortex-linux-amd64
             window_binary: vortex-window-linux-amd64
-            install_binary: vortex-install-linux-amd64
+            setup_binary: vortex-setup-linux-amd64
           - os: macos-latest
             goos: darwin
             goarch: arm64
             binary: vortex-darwin-arm64
             window_binary: vortex-window-darwin-arm64
-            install_binary: vortex-install-darwin-arm64
-            bootstrap_binary: vortex-bootstrap-darwin-arm64
-            launcher_binary: vortex-launcher-darwin-arm64
+            setup_binary: vortex-setup-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -166,13 +162,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           brew install librsvg imagemagick
-          ./scripts/generate-icons.sh
-          ./scripts/create-app-bundle.sh \
+          go run scripts/generate-icons.go
+          go run scripts/create-app-bundle.go \
             --version "$TAG" \
             --output ./dist \
-            --bootstrap "${{ matrix.bootstrap_binary }}" \
-            --launcher "${{ matrix.launcher_binary }}"
-          ./scripts/create-dmg.sh \
+            --setup "${{ matrix.setup_binary }}"
+          go run scripts/create-dmg.go \
             --version "$TAG" \
             --app-dir ./dist/Vortex.app \
             --output "Vortex-${TAG}.dmg"
@@ -183,10 +178,7 @@ jobs:
           path: |
             ${{ matrix.binary }}
             ${{ matrix.window_binary }}
-            ${{ matrix.install_binary }}
-            ${{ matrix.bootstrap_binary }}
-            ${{ matrix.launcher_binary }}
-            ${{ matrix.gui_install_binary }}
+            ${{ matrix.setup_binary }}
             Vortex-*.dmg
           retention-days: 1
 

@@ -103,89 +103,29 @@ func main() {
 	}
 	fmt.Printf("✓ Built %s\n", windowOutput)
 
-	// Step 4: compile vortex-install (standalone installer, pinned to this version).
-	installerOutput := installerBinaryOutput(*output, *targetOS, *targetArch, *local)
-	fmt.Printf("── Compiling vortex-install → %s\n", installerOutput)
-	installerLdflags := strings.Join([]string{
+	// Step 4: compile vortex-setup (unified installer/bootstrap).
+	setupOutput := setupBinaryOutput(*output, *targetOS, *targetArch, *local)
+	fmt.Printf("── Compiling vortex-setup → %s\n", setupOutput)
+	setupLdflags := []string{
 		"-s", "-w",
 		"-X", "main.Version=" + *version,
-	}, " ")
-
-	installerCmd := exec.Command("go", "build",
-		"-ldflags", installerLdflags,
-		"-o", installerOutput,
-		"./cmd/vortex-install",
-	)
-	installerCmd.Env = env
-	installerCmd.Stdout = os.Stdout
-	installerCmd.Stderr = os.Stderr
-	if err := installerCmd.Run(); err != nil {
-		fatal("go build (vortex-install) failed: %v", err)
 	}
-	fmt.Printf("✓ Built %s\n", installerOutput)
-
-	// Step 5: compile vortex-bootstrap (macOS first-launch helper, only for darwin).
-	if *targetOS == "darwin" {
-		bootstrapOutput := bootstrapBinaryOutput(*output, *targetOS, *targetArch, *local)
-		fmt.Printf("── Compiling vortex-bootstrap → %s\n", bootstrapOutput)
-		bootstrapLdflags := strings.Join([]string{
-			"-s", "-w",
-			"-X", "main.Version=" + *version,
-		}, " ")
-
-		bootstrapCmd := exec.Command("go", "build",
-			"-ldflags", bootstrapLdflags,
-			"-o", bootstrapOutput,
-			"./cmd/vortex-bootstrap",
-		)
-		bootstrapCmd.Env = env
-		bootstrapCmd.Stdout = os.Stdout
-		bootstrapCmd.Stderr = os.Stderr
-		if err := bootstrapCmd.Run(); err != nil {
-			fatal("go build (vortex-bootstrap) failed: %v", err)
-		}
-		fmt.Printf("✓ Built %s\n", bootstrapOutput)
-
-		// Step 5b: compile vortex-launcher (macOS .app bundle executable).
-		launcherOutput := launcherBinaryOutput(*output, *targetOS, *targetArch, *local)
-		fmt.Printf("── Compiling vortex-launcher → %s\n", launcherOutput)
-		launcherCmd := exec.Command("go", "build",
-			"-ldflags", "-s -w",
-			"-o", launcherOutput,
-			"./cmd/vortex-launcher",
-		)
-		launcherCmd.Env = env
-		launcherCmd.Stdout = os.Stdout
-		launcherCmd.Stderr = os.Stderr
-		if err := launcherCmd.Run(); err != nil {
-			fatal("go build (vortex-launcher) failed: %v", err)
-		}
-		fmt.Printf("✓ Built %s\n", launcherOutput)
-	}
-
-	// Step 6: compile vortex-install-gui (GUI installer for Windows, -H=windowsgui).
 	if *targetOS == "windows" {
-		guiInstallerOutput := guiInstallerBinaryOutput(*output, *targetOS, *targetArch, *local)
-		fmt.Printf("── Compiling vortex-install-gui → %s\n", guiInstallerOutput)
-		guiInstallerLdflags := strings.Join([]string{
-			"-s", "-w",
-			"-X", "main.Version=" + *version,
-			"-H=windowsgui",
-		}, " ")
-
-		guiInstallerCmd := exec.Command("go", "build",
-			"-ldflags", guiInstallerLdflags,
-			"-o", guiInstallerOutput,
-			"./cmd/vortex-install-gui",
-		)
-		guiInstallerCmd.Env = env
-		guiInstallerCmd.Stdout = os.Stdout
-		guiInstallerCmd.Stderr = os.Stderr
-		if err := guiInstallerCmd.Run(); err != nil {
-			fatal("go build (vortex-install-gui) failed: %v", err)
-		}
-		fmt.Printf("✓ Built %s\n", guiInstallerOutput)
+		setupLdflags = append(setupLdflags, "-H=windowsgui")
 	}
+
+	setupCmd := exec.Command("go", "build",
+		"-ldflags", strings.Join(setupLdflags, " "),
+		"-o", setupOutput,
+		"./cmd/vortex-setup",
+	)
+	setupCmd.Env = env
+	setupCmd.Stdout = os.Stdout
+	setupCmd.Stderr = os.Stderr
+	if err := setupCmd.Run(); err != nil {
+		fatal("go build (vortex-setup) failed: %v", err)
+	}
+	fmt.Printf("✓ Built %s\n", setupOutput)
 }
 
 // windowBinaryOutput derives the vortex-window binary path from the host
@@ -206,48 +146,21 @@ func windowBinaryOutput(hostOutput, goos, goarch string, local bool) string {
 	return filepath.Join(dir, name)
 }
 
-// installerBinaryOutput derives the vortex-install binary path.
-func installerBinaryOutput(hostOutput, goos, goarch string, local bool) string {
+// setupBinaryOutput derives the vortex-setup binary path.
+func setupBinaryOutput(hostOutput, goos, goarch string, local bool) string {
 	dir := filepath.Dir(hostOutput)
 	if local {
-		name := "vortex-install"
+		name := "vortex-setup"
 		if goos == "windows" {
 			name += ".exe"
 		}
 		return filepath.Join(dir, name)
 	}
-	name := fmt.Sprintf("vortex-install-%s-%s", goos, goarch)
+	name := fmt.Sprintf("vortex-setup-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
 	}
 	return filepath.Join(dir, name)
-}
-
-// bootstrapBinaryOutput derives the vortex-bootstrap binary path (macOS only).
-func bootstrapBinaryOutput(hostOutput, goos, goarch string, local bool) string {
-	dir := filepath.Dir(hostOutput)
-	if local {
-		return filepath.Join(dir, "vortex-bootstrap")
-	}
-	return filepath.Join(dir, fmt.Sprintf("vortex-bootstrap-%s-%s", goos, goarch))
-}
-
-// launcherBinaryOutput derives the vortex-launcher binary path (macOS only).
-func launcherBinaryOutput(hostOutput, goos, goarch string, local bool) string {
-	dir := filepath.Dir(hostOutput)
-	if local {
-		return filepath.Join(dir, "vortex-launcher")
-	}
-	return filepath.Join(dir, fmt.Sprintf("vortex-launcher-%s-%s", goos, goarch))
-}
-
-// guiInstallerBinaryOutput derives the vortex-install-gui binary path (Windows only).
-func guiInstallerBinaryOutput(hostOutput, goos, goarch string, local bool) string {
-	dir := filepath.Dir(hostOutput)
-	if local {
-		return filepath.Join(dir, "vortex-install-gui.exe")
-	}
-	return filepath.Join(dir, fmt.Sprintf("vortex-install-gui-%s-%s.exe", goos, goarch))
 }
 
 // gitCommit returns the short HEAD commit hash, or "unknown".
