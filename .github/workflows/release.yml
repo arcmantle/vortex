@@ -50,26 +50,26 @@ jobs:
           - os: windows-latest
             goos: windows
             goarch: amd64
-            binary: vortex-windows-amd64.exe
-            window_binary: vortex-window-windows-amd64.exe
+            binary: vortex-host-windows-amd64.exe
+            window_binary: vortex-windows-amd64.exe
             setup_binary: vortex-setup-windows-amd64.exe
           - os: windows-latest
             goos: windows
             goarch: arm64
-            binary: vortex-windows-arm64.exe
-            window_binary: vortex-window-windows-arm64.exe
+            binary: vortex-host-windows-arm64.exe
+            window_binary: vortex-windows-arm64.exe
             setup_binary: vortex-setup-windows-arm64.exe
           - os: ubuntu-22.04
             goos: linux
             goarch: amd64
-            binary: vortex-linux-amd64
-            window_binary: vortex-window-linux-amd64
+            binary: vortex-host-linux-amd64
+            window_binary: vortex-linux-amd64
             setup_binary: vortex-setup-linux-amd64
           - os: macos-latest
             goos: darwin
             goarch: arm64
-            binary: vortex-darwin-arm64
-            window_binary: vortex-window-darwin-arm64
+            binary: vortex-host-darwin-arm64
+            window_binary: vortex-darwin-arm64
             setup_binary: vortex-setup-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:

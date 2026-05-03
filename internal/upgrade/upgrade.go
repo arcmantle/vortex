@@ -44,7 +44,7 @@ func Run(args []string, opts Options) error {
 		}
 	}
 
-	hostTargetPath := filepath.Join(installDir, release.BinaryName("vortex"))
+	hostTargetPath := filepath.Join(installDir, release.BinaryName("vortex-host"))
 	currentPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate current executable: %w", err)
@@ -66,8 +66,8 @@ func Run(args []string, opts Options) error {
 		target    string
 	}
 	binaries := []binaryInfo{
-		{name: "vortex", assetName: release.AssetName("vortex", runtime.GOOS, runtime.GOARCH), target: hostTargetPath},
-		{name: "vortex-window", assetName: release.AssetName("vortex-window", runtime.GOOS, runtime.GOARCH), target: filepath.Join(installDir, release.BinaryName("vortex-window"))},
+		{name: "vortex-host", assetName: release.AssetName("vortex-host", runtime.GOOS, runtime.GOARCH), target: hostTargetPath},
+		{name: "vortex", assetName: release.AssetName("vortex", runtime.GOOS, runtime.GOARCH), target: filepath.Join(installDir, release.BinaryName("vortex"))},
 	}
 
 	assetMap := map[string]*release.ReleaseAsset{}
@@ -154,7 +154,7 @@ func Run(args []string, opts Options) error {
 		}
 		fmt.Printf("Verified SHA-256 for %s\n", b.assetName)
 
-		isHostBinary := b.name == "vortex"
+		isHostBinary := b.name == "vortex-host"
 		if runtime.GOOS == "windows" {
 			if isHostBinary && sameInstallPath {
 				if err := scheduleWindowsReplacement(tmpPath, b.target, os.Getpid()); err != nil {
@@ -187,7 +187,7 @@ func Run(args []string, opts Options) error {
 
 	if runtime.GOOS == "windows" && sameInstallPath {
 		fmt.Printf("The host binary will be replaced after this process exits.\n")
-		fmt.Printf("Upgraded vortex-window to %s; host binary scheduled for replacement.\n", latest.TagName)
+		fmt.Printf("Upgraded vortex to %s; host binary scheduled for replacement.\n", latest.TagName)
 	} else {
 		fmt.Printf("Upgraded to vortex %s\n", latest.TagName)
 	}

@@ -62,11 +62,11 @@ func doBuild() {
 	run("pnpm", "--dir", uiDir, "build")
 
 	// Build the two binaries that get "installed" by the bootstrap/installer.
-	step("Building vortex")
-	goBuild(filepath.Join(workDir, binaryName("vortex")), "./cmd/vortex/")
+	step("Building vortex-host")
+	goBuild(filepath.Join(workDir, binaryName("vortex-host")), "./cmd/vortex/")
 
-	step("Building vortex-window")
-	goBuild(filepath.Join(workDir, binaryName("vortex-window")), "./cmd/vortex-window/")
+	step("Building vortex")
+	goBuild(filepath.Join(workDir, binaryName("vortex")), "./cmd/vortex-window/")
 
 	switch runtime.GOOS {
 	case "darwin":
@@ -93,8 +93,8 @@ func buildMacOS() {
 	// without needing env vars (works when launched from Finder).
 	localBinDir := filepath.Join(workDir, "Vortex.app", "Contents", "Resources", "local-binaries")
 	must(os.MkdirAll(localBinDir, 0o755))
+	copyFileTo(filepath.Join(workDir, "vortex-host"), filepath.Join(localBinDir, "vortex-host"))
 	copyFileTo(filepath.Join(workDir, "vortex"), filepath.Join(localBinDir, "vortex"))
-	copyFileTo(filepath.Join(workDir, "vortex-window"), filepath.Join(localBinDir, "vortex-window"))
 
 	step("Creating DMG")
 	dmgPath := filepath.Join(workDir, "Vortex.dmg")
@@ -120,8 +120,8 @@ func buildWindows() {
 	// Place binaries where the installer can find them via VORTEX_BOOTSTRAP_LOCAL.
 	binDir := filepath.Join(workDir, "binaries")
 	must(os.MkdirAll(binDir, 0o755))
+	must(os.Rename(filepath.Join(workDir, "vortex-host.exe"), filepath.Join(binDir, "vortex-host.exe")))
 	must(os.Rename(filepath.Join(workDir, "vortex.exe"), filepath.Join(binDir, "vortex.exe")))
-	must(os.Rename(filepath.Join(workDir, "vortex-window.exe"), filepath.Join(binDir, "vortex-window.exe")))
 
 	success("Installer ready: %s", filepath.Join(workDir, binaryName("vortex-setup")))
 	fmt.Println()
@@ -177,7 +177,7 @@ func uninstallVortex() {
 		installDir = filepath.Join(base, "Programs", "Vortex")
 	}
 
-	binaries := []string{"vortex", "vortex-window"}
+	binaries := []string{"vortex-host", "vortex"}
 	removed := false
 	for _, name := range binaries {
 		p := filepath.Join(installDir, binaryName(name))
@@ -228,15 +228,15 @@ func killVortex() {
 	killed := false
 	switch runtime.GOOS {
 	case "darwin", "linux":
-		// Kill vortex-window first (the UI), then vortex itself.
-		for _, name := range []string{"vortex-window", "vortex"} {
+		// Kill vortex first (the UI), then vortex-host.
+		for _, name := range []string{"vortex", "vortex-host"} {
 			cmd := exec.Command("pkill", "-f", name)
 			if cmd.Run() == nil {
 				killed = true
 			}
 		}
 	case "windows":
-		for _, name := range []string{"vortex-window.exe", "vortex.exe"} {
+		for _, name := range []string{"vortex.exe", "vortex-host.exe"} {
 			cmd := exec.Command("taskkill", "/F", "/IM", name)
 			cmd.Run()
 			killed = true

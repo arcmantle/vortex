@@ -463,7 +463,7 @@ The Vite dev server proxies API calls to the Go backend. Use `--dev` to skip the
 cd cmd/vortex-ui/web && pnpm install && pnpm build && cd ../../..
 
 # Build the Go binary (UI is embedded by default)
-go build -o vortex ./cmd/vortex
+go build -o vortex-host ./cmd/vortex
 ```
 
 <details>
@@ -472,7 +472,7 @@ go build -o vortex ./cmd/vortex
 On Windows, add `-ldflags "-H=windowsgui"` to build a GUI binary that doesn't keep a console window open:
 
 ```sh
-go build -ldflags "-H=windowsgui" -o vortex.exe ./cmd/vortex
+go build -ldflags "-H=windowsgui" -o vortex-host.exe ./cmd/vortex
 ```
 
 CLI commands (`help`, `version`, `config`, etc.) still work from the terminal — Vortex reattaches to the parent console when needed.

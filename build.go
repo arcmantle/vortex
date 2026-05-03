@@ -82,9 +82,9 @@ func main() {
 	}
 	fmt.Printf("✓ Built %s\n", *output)
 
-	// Step 3: compile vortex-window (GUI subsystem on Windows).
+	// Step 3: compile vortex (GUI subsystem on Windows).
 	windowOutput := windowBinaryOutput(*output, *targetOS, *targetArch, *local)
-	fmt.Printf("── Compiling vortex-window (GUI) → %s\n", windowOutput)
+	fmt.Printf("── Compiling vortex (GUI) → %s\n", windowOutput)
 	windowLdflags := "-s -w"
 	if *targetOS == "windows" {
 		windowLdflags += " -H=windowsgui"
@@ -99,7 +99,7 @@ func main() {
 	windowCmd.Stdout = os.Stdout
 	windowCmd.Stderr = os.Stderr
 	if err := windowCmd.Run(); err != nil {
-		fatal("go build (vortex-window) failed: %v", err)
+		fatal("go build (vortex gui) failed: %v", err)
 	}
 	fmt.Printf("✓ Built %s\n", windowOutput)
 
@@ -128,18 +128,18 @@ func main() {
 	fmt.Printf("✓ Built %s\n", setupOutput)
 }
 
-// windowBinaryOutput derives the vortex-window binary path from the host
+// windowBinaryOutput derives the vortex GUI binary path from the host
 // binary path by placing it alongside the host binary.
 func windowBinaryOutput(hostOutput, goos, goarch string, local bool) string {
 	dir := filepath.Dir(hostOutput)
 	if local {
-		name := "vortex-window"
+		name := "vortex"
 		if goos == "windows" {
 			name += ".exe"
 		}
 		return filepath.Join(dir, name)
 	}
-	name := fmt.Sprintf("vortex-window-%s-%s", goos, goarch)
+	name := fmt.Sprintf("vortex-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
 	}
@@ -175,14 +175,14 @@ func gitCommit() string {
 // defaultOutput returns a platform-appropriate binary name.
 func defaultOutput(goos, goarch string, local bool) string {
 	if local {
-		name := filepath.Join("bin", "vortex")
+		name := filepath.Join("bin", "vortex-host")
 		if goos == "windows" {
 			name += ".exe"
 		}
 		return name
 	}
 
-	name := fmt.Sprintf("vortex-%s-%s", goos, goarch)
+	name := fmt.Sprintf("vortex-host-%s-%s", goos, goarch)
 	if goos == "windows" {
 		name += ".exe"
 	}

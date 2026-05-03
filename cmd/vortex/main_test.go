@@ -161,13 +161,13 @@ func TestWindowBinaryNameUsesAbsolutePathForRelativeLookup(t *testing.T) {
 	})
 
 	resolveExecutablePath = func() (string, error) {
-		return filepath.Join(tempDir, "bin", "vortex.exe"), nil
+		return filepath.Join(tempDir, "bin", "vortex-host.exe"), nil
 	}
 	lookupWindowBinary = func(string) (string, error) {
-		return "vortex-window.exe", exec.ErrDot
+		return "vortex.exe", exec.ErrDot
 	}
 
-	want, err := filepath.Abs("vortex-window.exe")
+	want, err := filepath.Abs("vortex.exe")
 	if err != nil {
 		t.Fatalf("filepath.Abs() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestWindowBinaryNamePrefersSiblingExecutable(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("os.MkdirAll() error = %v", err)
 	}
-	sibling := filepath.Join(binDir, "vortex-window.exe")
+	sibling := filepath.Join(binDir, "vortex.exe")
 	if err := os.WriteFile(sibling, []byte("stub"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
@@ -195,7 +195,7 @@ func TestWindowBinaryNamePrefersSiblingExecutable(t *testing.T) {
 	})
 
 	resolveExecutablePath = func() (string, error) {
-		return filepath.Join(binDir, "vortex.exe"), nil
+		return filepath.Join(binDir, "vortex-host.exe"), nil
 	}
 	lookupWindowBinary = func(string) (string, error) {
 		return "", errors.New("should not be called")

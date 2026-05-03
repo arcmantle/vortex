@@ -11,11 +11,11 @@ go run scripts/test-installer.go
 This will:
 
 1. Rebuild the frontend UI (`pnpm build`)
-2. Compile `vortex`, `vortex-window`, `vortex-setup`
+2. Compile `vortex-host`, `vortex`, `vortex-setup`
 3. Assemble a `Vortex.app` bundle with the binaries embedded
 4. Create a DMG
 5. **Kill any running vortex processes** (they'd show stale UI otherwise)
-6. **Remove your existing `~/.local/bin/vortex` install** and `/Applications/Vortex.app` so setup triggers
+6. **Remove your existing `~/.local/bin/vortex-host` install** and `/Applications/Vortex.app` so setup triggers
 7. Open the DMG in Finder
 
 Then you:
@@ -65,14 +65,14 @@ Vortex.app/
     Resources/
       vortex.icns
       local-binaries/    ← Only present in test builds
+        vortex-host
         vortex
-        vortex-window
 ```
 
 **Launch flow:**
-1. `vortex-setup` checks if `~/.local/bin/vortex` exists
+1. `vortex-setup` checks if `~/.local/bin/vortex-host` exists
 2. If yes → exec it via login shell (inherits PATH, homebrew, nvm, etc.)
-3. If no → show progress webview, copy binaries, configure PATH, launch vortex
+3. If no → show progress webview, copy binaries, configure PATH, launch vortex-host
 
 ## Re-installing After Testing
 

@@ -21,7 +21,7 @@ var (
 )
 
 // uiLifecycle manages the native webview window lifecycle by spawning a
-// separate vortex-window process. This keeps the host binary as a
+// separate vortex gui process. This keeps the host binary as a
 // console-subsystem app, avoiding -H=windowsgui issues on Windows.
 type uiLifecycle struct {
 	mu           sync.Mutex
@@ -29,7 +29,7 @@ type uiLifecycle struct {
 	hidden       bool // child alive but window not visible (darwin hide-on-close)
 	suppressStop bool
 	cancel       context.CancelFunc
-	stdinPipe    io.WriteCloser // send commands to vortex-window
+	stdinPipe    io.WriteCloser // send commands to vortex gui
 	identity     instance.Identity
 	windowTitle  string
 	windowURL    string
@@ -44,13 +44,13 @@ func newUILifecycle(identity instance.Identity, title, url string) *uiLifecycle 
 	}
 }
 
-// windowBinaryName returns the path to the vortex-window executable.
+// windowBinaryName returns the path to the vortex GUI executable.
 // It looks next to the current executable first, then falls back to PATH.
 func windowBinaryName() string {
 	self, err := resolveExecutablePath()
 	if err == nil {
 		dir := filepath.Dir(self)
-		candidate := filepath.Join(dir, "vortex-window")
+		candidate := filepath.Join(dir, "vortex")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -59,7 +59,7 @@ func windowBinaryName() string {
 			return candidate
 		}
 	}
-	if candidate, err := lookupWindowBinary("vortex-window"); err == nil || errors.Is(err, exec.ErrDot) {
+	if candidate, err := lookupWindowBinary("vortex"); err == nil || errors.Is(err, exec.ErrDot) {
 		if filepath.IsAbs(candidate) {
 			return candidate
 		}
@@ -68,10 +68,10 @@ func windowBinaryName() string {
 		}
 		return candidate
 	}
-	return "vortex-window"
+	return "vortex"
 }
 
-// Open launches the vortex-window subprocess. Returns false if the window is
+// Open launches the vortex GUI subprocess. Returns false if the window is
 // already open. When stopOnClose is true, the provided stop function is called
 // when the subprocess exits (unless the close was suppressed by Hide).
 func (ui *uiLifecycle) Open(ctx context.Context, stop context.CancelFunc, stopOnClose bool) bool {
@@ -119,25 +119,25 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
-		log.Printf("vortex-window stdin pipe error: %v", err)
+		log.Printf("vortex gui stdin pipe error: %v", err)
 		ui.markClosed(ctx, stop, stopOnClose)
 		return
 	}
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("vortex-window stdout pipe error: %v", err)
+		log.Printf("vortex gui stdout pipe error: %v", err)
 		ui.markClosed(ctx, stop, stopOnClose)
 		return
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		log.Printf("vortex-window stderr pipe error: %v", err)
+		log.Printf("vortex gui stderr pipe error: %v", err)
 		ui.markClosed(ctx, stop, stopOnClose)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("vortex-window start error: %v", err)
+		log.Printf("vortex gui start error: %v", err)
 		ui.markClosed(ctx, stop, stopOnClose)
 		return
 	}
@@ -145,7 +145,7 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 	go func() {
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
-			log.Printf("vortex-window stderr: %s", scanner.Text())
+			log.Printf("vortex gui stderr: %s", scanner.Text())
 		}
 	}()
 
@@ -170,7 +170,7 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 			case "HIDDEN":
 				ui.handleChildHidden(ctx, stop, stopOnClose)
 			default:
-				log.Printf("vortex-window stdout: %s", msg)
+				log.Printf("vortex gui stdout: %s", msg)
 			}
 		}
 	}()
@@ -180,7 +180,7 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 	case <-readyCh:
 		// good
 	case <-ctx.Done():
-		log.Printf("vortex-window: context cancelled before READY")
+		log.Printf("vortex gui: context cancelled before READY")
 	}
 
 	ui.mu.Lock()
@@ -191,7 +191,7 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 	if err := cmd.Wait(); err != nil {
 		// Context cancellation is expected when we close the window.
 		if ctx.Err() == nil {
-			log.Printf("vortex-window exited: %v", err)
+			log.Printf("vortex gui exited: %v", err)
 		}
 	}
 
@@ -240,7 +240,7 @@ func (ui *uiLifecycle) markClosed(ctx context.Context, stop context.CancelFunc, 
 	}
 }
 
-// Close sends CLOSE to the vortex-window process. When suppressStop is true,
+// Close sends CLOSE to the vortex gui process. When suppressStop is true,
 // the window close will not trigger the stop function passed to Open (used for
 // hide-ui). Returns false if the window is not open.
 func (ui *uiLifecycle) Close(suppressStop bool) bool {
@@ -264,7 +264,7 @@ func (ui *uiLifecycle) Close(suppressStop bool) bool {
 	return true
 }
 
-// Focus sends FOCUS to the vortex-window process. If the window is hidden,
+// Focus sends FOCUS to the vortex gui process. If the window is hidden,
 // sends SHOW instead to unhide it. Returns false if the window is not open.
 func (ui *uiLifecycle) Focus() bool {
 	ui.mu.Lock()

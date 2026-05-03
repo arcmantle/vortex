@@ -12,7 +12,7 @@ cmd/vortex-ui/web/wailsjs/*.exe
 .tmp
 .tools/
 /vortex
+/vortex-host
 /vortex-window
-/vortex-bootstrap
 /vortex-setup
 *.dmg
