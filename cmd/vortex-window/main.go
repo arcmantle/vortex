@@ -7,8 +7,10 @@
 // Communication with the parent process:
 //
 //	stdout: "READY\n" once the window is visible.
+//	        "HIDDEN\n" when window is hidden (darwin only).
 //	stdin:  line-delimited commands from the parent:
 //	        "FOCUS\n"  — bring window to foreground
+//	        "SHOW\n"   — unhide window (darwin only)
 //	        "CLOSE\n"  — close window gracefully
 //	        EOF        — close window (parent exited)
 package main
@@ -47,7 +49,11 @@ func main() {
 		mu         sync.Mutex
 		controller webview.Controller
 		readySent  bool
+		lifecycle  = newPlatformLifecycle()
 	)
+
+	// Platform-specific setup (installs AppKit delegates on darwin, no-op elsewhere).
+	lifecycle.beforeWebview(stop)
 
 	// Read commands from the parent on stdin.
 	go func() {
@@ -62,6 +68,8 @@ func main() {
 				if c != nil {
 					c.Focus()
 				}
+			case "SHOW":
+				lifecycle.show()
 			case "CLOSE":
 				stop()
 				return
@@ -77,6 +85,10 @@ func main() {
 		controller = c
 		readySent = true
 		mu.Unlock()
+
+		// Platform-specific post-creation setup (window delegate on darwin).
+		lifecycle.onReady(c)
+
 		fmt.Fprintln(os.Stdout, "READY")
 		if c != nil {
 			c.Focus()

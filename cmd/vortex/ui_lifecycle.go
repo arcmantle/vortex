@@ -26,6 +26,7 @@ var (
 type uiLifecycle struct {
 	mu           sync.Mutex
 	open         bool
+	hidden       bool // child alive but window not visible (darwin hide-on-close)
 	suppressStop bool
 	cancel       context.CancelFunc
 	stdinPipe    io.WriteCloser // send commands to vortex-window
@@ -76,11 +77,19 @@ func windowBinaryName() string {
 func (ui *uiLifecycle) Open(ctx context.Context, stop context.CancelFunc, stopOnClose bool) bool {
 	ui.mu.Lock()
 	if ui.open {
+		// If the window is hidden (child alive, window not visible), unhide it.
+		if ui.hidden && ui.stdinPipe != nil {
+			pipe := ui.stdinPipe
+			ui.mu.Unlock()
+			fmt.Fprintln(pipe, "SHOW")
+			return true
+		}
 		ui.mu.Unlock()
 		return false
 	}
 	uiCtx, uiCancel := context.WithCancel(ctx)
 	ui.open = true
+	ui.hidden = false
 	ui.suppressStop = false
 	ui.cancel = uiCancel
 	ui.stdinPipe = nil
@@ -140,17 +149,38 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 		}
 	}()
 
-	// Wait for the READY signal from the child.
-	scanner := bufio.NewScanner(stdoutPipe)
-	ready := false
-	for scanner.Scan() {
-		if scanner.Text() == "READY" {
-			ready = true
-			break
+	// Read stdout continuously — the child sends lifecycle messages.
+	readyCh := make(chan struct{}, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			msg := scanner.Text()
+			switch msg {
+			case "READY":
+				ui.mu.Lock()
+				ui.hidden = false
+				ui.mu.Unlock()
+				if err := instance.SetUIState(ui.identity, "open"); err != nil {
+					log.Printf("instance registry warning: %v", err)
+				}
+				select {
+				case readyCh <- struct{}{}:
+				default:
+				}
+			case "HIDDEN":
+				ui.handleChildHidden(ctx, stop, stopOnClose)
+			default:
+				log.Printf("vortex-window stdout: %s", msg)
+			}
 		}
-	}
-	if !ready {
-		log.Printf("vortex-window: did not receive READY signal")
+	}()
+
+	// Wait for READY (or child exit).
+	select {
+	case <-readyCh:
+		// good
+	case <-ctx.Done():
+		log.Printf("vortex-window: context cancelled before READY")
 	}
 
 	ui.mu.Lock()
@@ -168,11 +198,24 @@ func (ui *uiLifecycle) runWindowProcess(ctx context.Context, stop context.Cancel
 	ui.markClosed(ctx, stop, stopOnClose)
 }
 
+// handleChildHidden is called when the child sends HIDDEN (window was hidden,
+// process is still alive). Transitions the UI to the hidden state.
+func (ui *uiLifecycle) handleChildHidden(ctx context.Context, stop context.CancelFunc, stopOnClose bool) {
+	ui.mu.Lock()
+	ui.hidden = true
+	ui.mu.Unlock()
+
+	if err := instance.SetUIState(ui.identity, "hidden"); err != nil {
+		log.Printf("instance registry warning: %v", err)
+	}
+}
+
 func (ui *uiLifecycle) markClosed(ctx context.Context, stop context.CancelFunc, stopOnClose bool) {
 	ui.mu.Lock()
 	suppress := ui.suppressStop
 	onClose := ui.onClose
 	ui.open = false
+	ui.hidden = false
 	ui.suppressStop = false
 	ui.cancel = nil
 	if ui.stdinPipe != nil {
@@ -221,15 +264,20 @@ func (ui *uiLifecycle) Close(suppressStop bool) bool {
 	return true
 }
 
-// Focus sends FOCUS to the vortex-window process. Returns false if the window
-// is not open.
+// Focus sends FOCUS to the vortex-window process. If the window is hidden,
+// sends SHOW instead to unhide it. Returns false if the window is not open.
 func (ui *uiLifecycle) Focus() bool {
 	ui.mu.Lock()
 	pipe := ui.stdinPipe
 	isOpen := ui.open
+	isHidden := ui.hidden
 	ui.mu.Unlock()
 	if !isOpen || pipe == nil {
 		return false
+	}
+	if isHidden {
+		_, err := fmt.Fprintln(pipe, "SHOW")
+		return err == nil
 	}
 	_, err := fmt.Fprintln(pipe, "FOCUS")
 	return err == nil
