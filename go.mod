@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	arcmantle/windowfocus v0.0.0
 	arcmantle/windowicon v0.0.0
+	arcmantle/windowlifecycle v0.0.0
 	github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -25,3 +26,5 @@ require (
 replace arcmantle/windowfocus => ./windowfocus
 
 replace arcmantle/windowicon => ./windowicon
+
+replace arcmantle/windowlifecycle => ./windowlifecycle
