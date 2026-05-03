@@ -27,7 +27,10 @@ func newPlatformLifecycle() *darwinLifecycle {
 
 // beforeWebview installs AppKit delegates. Must be called before webview.New().
 func (dl *darwinLifecycle) beforeWebview(stop func()) {
-	events := windowlifecycle.Configure(windowlifecycle.Config{HideOnClose: true})
+	events := windowlifecycle.Configure(windowlifecycle.Config{
+		HideOnClose: true,
+		AppName:     "Vortex",
+	})
 	dl.handleEvents(events, stop)
 }
 

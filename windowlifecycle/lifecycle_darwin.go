@@ -6,19 +6,28 @@ package windowlifecycle
 #cgo CFLAGS: -x objective-c
 #cgo LDFLAGS: -framework Cocoa
 
+#include <stdlib.h>
+
 // Implemented in lifecycle_darwin.m
 extern void vortexInstallAppDelegate(void);
+extern void vortexSetAppName(const char *name);
 extern void vortexInstallWindowDelegate(int hideOnClose);
 extern void vortexShowMainWindow(void);
 */
 import "C"
+
+import "unsafe"
 
 var eventChan chan Event
 
 func configure(cfg Config) <-chan Event {
 	eventChan = make(chan Event, 8)
 	C.vortexInstallAppDelegate()
-	_ = cfg // stored for InstallWindowDelegate
+	if cfg.AppName != "" {
+		cName := C.CString(cfg.AppName)
+		C.vortexSetAppName(cName)
+		C.free(unsafe.Pointer(cName))
+	}
 	return eventChan
 }
 

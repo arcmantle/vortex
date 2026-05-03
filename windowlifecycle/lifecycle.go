@@ -43,6 +43,10 @@ type Config struct {
 	// HideOnClose makes the red X hide the window instead of closing it.
 	// The process stays alive for dock-click reopen.
 	HideOnClose bool
+
+	// AppName sets the name shown in the macOS menu bar and Cmd+Q menu item.
+	// If empty, the process name is used unchanged.
+	AppName string
 }
 
 // Configure installs AppKit lifecycle delegates. Must be called on the main
