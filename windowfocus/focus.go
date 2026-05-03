@@ -25,3 +25,14 @@ func Focus(window unsafe.Pointer) {
 	showApp()
 	focus(window)
 }
+
+// HideWindow hides a native window without destroying it (orderOut on macOS).
+// On platforms that don't support persistent hide, this is a no-op.
+func HideWindow(window unsafe.Pointer) {
+	hideWindow(window)
+}
+
+// ShowWindow makes a previously hidden native window visible and focused.
+func ShowWindow(window unsafe.Pointer) {
+	showWindow(window)
+}

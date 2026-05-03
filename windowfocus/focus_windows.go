@@ -3,22 +3,8 @@
 package windowfocus
 
 /*
-#include <windows.h>
-
-static void focusWindow(void *hwnd) {
-	HWND window = (HWND)hwnd;
-	if (!window) {
-		return;
-	}
-	if (IsIconic(window)) {
-		ShowWindow(window, SW_RESTORE);
-	} else {
-		ShowWindow(window, SW_SHOW);
-	}
-	BringWindowToTop(window);
-	SetActiveWindow(window);
-	SetForegroundWindow(window);
-}
+// Implemented in focus_windows.c
+extern void focusWindow(void *hwnd);
 */
 import "C"
 
@@ -35,3 +21,7 @@ func focus(window unsafe.Pointer) {
 
 	C.focusWindow(window)
 }
+
+func hideWindow(_ unsafe.Pointer) {}
+
+func showWindow(_ unsafe.Pointer) {}

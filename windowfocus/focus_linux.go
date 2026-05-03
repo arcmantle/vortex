@@ -5,15 +5,8 @@ package windowfocus
 /*
 #cgo pkg-config: gtk+-3.0
 
-#include <gtk/gtk.h>
-
-static void focusWindow(void *window) {
-	if (!window) {
-		return;
-	}
-	gtk_window_deiconify(GTK_WINDOW(window));
-	gtk_window_present(GTK_WINDOW(window));
-}
+// Implemented in focus_linux.c
+extern void focusWindow(void *window);
 */
 import "C"
 
@@ -30,3 +23,7 @@ func focus(window unsafe.Pointer) {
 
 	C.focusWindow(window)
 }
+
+func hideWindow(_ unsafe.Pointer) {}
+
+func showWindow(_ unsafe.Pointer) {}

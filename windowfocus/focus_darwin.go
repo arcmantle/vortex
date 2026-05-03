@@ -6,43 +6,12 @@ package windowfocus
 #cgo CFLAGS: -x objective-c
 #cgo LDFLAGS: -framework Cocoa
 
-#include <Cocoa/Cocoa.h>
-
-static void showApplication(void);
-static void hideApplication(void);
-static void focusWindow(void *windowPtr);
-
-static void showApplication(void) {
-	@autoreleasepool {
-		NSApplication *app = [NSApplication sharedApplication];
-		[app setActivationPolicy:NSApplicationActivationPolicyRegular];
-		[app unhide:nil];
-	}
-}
-
-static void hideApplication(void) {
-	@autoreleasepool {
-		NSApplication *app = [NSApplication sharedApplication];
-		[app hide:nil];
-		[app setActivationPolicy:NSApplicationActivationPolicyAccessory];
-	}
-}
-
-static void focusWindow(void *windowPtr) {
-	@autoreleasepool {
-		NSWindow *window = (__bridge NSWindow *)windowPtr;
-		if (!window) {
-			return;
-		}
-		[[NSApplication sharedApplication] unhide:nil];
-		if ([window isMiniaturized]) {
-			[window deminiaturize:nil];
-		}
-		[window makeKeyAndOrderFront:nil];
-		[window orderFrontRegardless];
-		[[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
-	}
-}
+// Implemented in focus_darwin.m
+extern void showApplication(void);
+extern void hideApplication(void);
+extern void focusWindow(void *windowPtr);
+extern void hideNativeWindow(void *windowPtr);
+extern void showNativeWindow(void *windowPtr);
 */
 import "C"
 
@@ -62,4 +31,18 @@ func focus(window unsafe.Pointer) {
 	}
 
 	C.focusWindow(window)
+}
+
+func hideWindow(window unsafe.Pointer) {
+	if window == nil {
+		return
+	}
+	C.hideNativeWindow(window)
+}
+
+func showWindow(window unsafe.Pointer) {
+	if window == nil {
+		return
+	}
+	C.showNativeWindow(window)
 }

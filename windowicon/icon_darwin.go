@@ -6,15 +6,8 @@ package windowicon
 #cgo CFLAGS: -x objective-c
 #cgo LDFLAGS: -framework Cocoa
 
-#include <Cocoa/Cocoa.h>
-
-static void setWindowIconFromData(const void *data, int len) {
-	NSData *imgData = [NSData dataWithBytes:data length:len];
-	NSImage *img = [[NSImage alloc] initWithData:imgData];
-	if (img) {
-		[NSApp setApplicationIconImage:img];
-	}
-}
+// Implemented in icon_darwin.m
+extern void setWindowIconFromData(const void *data, int len);
 */
 import "C"
 
