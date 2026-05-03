@@ -6,6 +6,8 @@ import "context"
 
 type Controller interface {
 	Focus()
+	Hide()
+	Show()
 }
 
 // Open opens a native webview window pointing at url.

@@ -22,3 +22,15 @@ func (c nativeController) Focus() {
 		windowfocus.Focus(c.w.Window())
 	})
 }
+
+func (c nativeController) Hide() {
+	c.w.Dispatch(func() {
+		windowfocus.HideWindow(c.w.Window())
+	})
+}
+
+func (c nativeController) Show() {
+	c.w.Dispatch(func() {
+		windowfocus.ShowWindow(c.w.Window())
+	})
+}
