@@ -61,13 +61,15 @@ func main() {
 		return
 	}
 
-	vortexBin := filepath.Join(installDir, release.BinaryName("vortex"))
-	alreadyInstalled := fileExists(vortexBin)
+	vortexHostBin := filepath.Join(installDir, release.BinaryName("vortex-host"))
+	vortexGUIBin := filepath.Join(installDir, release.BinaryName("vortex"))
+	alreadyInstalled := fileExists(vortexHostBin)
 
-	// macOS: if already installed, skip the UI — just launch directly.
-	// The launcher calls us on every .app open, so this must be fast.
+	// macOS: if already installed, skip the UI — just launch the GUI directly.
+	// The GUI will spawn the host if needed. The launcher calls us on every
+	// .app open, so this must be fast.
 	if alreadyInstalled && runtime.GOOS == "darwin" {
-		launchVortex(vortexBin)
+		launchVortex(vortexGUIBin)
 		return
 	}
 
@@ -153,6 +155,7 @@ func runInstall(installDir string, alreadyInstalled bool) {
 		} else {
 			doneCh <- doInstall(installDir, version, progressCh)
 		}
+		cancel()
 	}()
 
 	url := fmt.Sprintf("http://%s/", addr)
@@ -170,8 +173,8 @@ func runInstall(installDir string, alreadyInstalled bool) {
 			showError(fmt.Sprintf("Installation failed: %v", err))
 			return
 		}
-		vortexBin := filepath.Join(installDir, release.BinaryName("vortex"))
-		launchVortex(vortexBin)
+		vortexGUIBin := filepath.Join(installDir, release.BinaryName("vortex"))
+		launchVortex(vortexGUIBin)
 	default:
 	}
 }
@@ -199,8 +202,8 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 		return err
 	}
 
-	hostAssetName := release.AssetName("vortex", runtime.GOOS, runtime.GOARCH)
-	windowAssetName := release.AssetName("vortex-window", runtime.GOOS, runtime.GOARCH)
+	hostAssetName := release.AssetName("vortex-host", runtime.GOOS, runtime.GOARCH)
+	windowAssetName := release.AssetName("vortex", runtime.GOOS, runtime.GOARCH)
 
 	assets := map[string]*release.ReleaseAsset{}
 	for i := range rel.Assets {
@@ -234,8 +237,8 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 		target   string
 		progress int
 	}{
-		{"vortex", hostAsset, checksums[hostAssetName], filepath.Join(installDir, release.BinaryName("vortex")), 50},
-		{"vortex-window", windowAsset, checksums[windowAssetName], filepath.Join(installDir, release.BinaryName("vortex-window")), 80},
+		{"vortex-host", hostAsset, checksums[hostAssetName], filepath.Join(installDir, release.BinaryName("vortex-host")), 50},
+		{"vortex", windowAsset, checksums[windowAssetName], filepath.Join(installDir, release.BinaryName("vortex")), 80},
 	}
 
 	for _, b := range binaries {
@@ -288,8 +291,8 @@ func doLocalInstall(installDir, localDir string, progressCh chan<- progressUpdat
 		name     string
 		progress int
 	}{
-		{"vortex", 30},
-		{"vortex-window", 70},
+		{"vortex-host", 30},
+		{"vortex", 70},
 	}
 
 	for _, b := range binaries {

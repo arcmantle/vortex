@@ -1,4 +1,4 @@
-// vortex-window is a thin native webview host. It opens a single window
+// vortex (gui) is a thin native webview host. It opens a single window
 // pointing at a URL and exits when the window is closed. The main vortex
 // binary spawns this process for the GUI; keeping it separate means the
 // host process stays a console-subsystem app and avoids the ConPTY / PTY
@@ -32,18 +32,31 @@ import (
 
 func main() {
 	title := flag.String("title", "Vortex", "window title")
-	url := flag.String("url", "", "URL to navigate to (required)")
+	url := flag.String("url", "", "URL to navigate to (if empty, spawns host automatically)")
 	width := flag.Int("width", 1280, "initial window width")
 	height := flag.Int("height", 800, "initial window height")
 	flag.Parse()
 
-	if *url == "" {
-		fmt.Fprintln(os.Stderr, "vortex-window: --url is required")
-		os.Exit(1)
+	log.SetPrefix("[vortex gui] ")
+
+	// If no URL provided, enter self-launch mode: ensure the host is running
+	// and discover its URL from the instance registry.
+	targetURL := *url
+	if targetURL == "" {
+		resolved, err := selfLaunchURL()
+		if err != nil {
+			log.Printf("self-launch failed: %v", err)
+			fmt.Fprintf(os.Stderr, "vortex: %v\n", err)
+			os.Exit(1)
+		}
+		targetURL = resolved
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Self-launched mode: no parent process to communicate with.
+	selfLaunched := *url == ""
 
 	var (
 		mu         sync.Mutex
@@ -55,29 +68,31 @@ func main() {
 	// Platform-specific setup (installs AppKit delegates on darwin, no-op elsewhere).
 	lifecycle.beforeWebview(stop)
 
-	// Read commands from the parent on stdin.
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			cmd := strings.TrimSpace(scanner.Text())
-			switch cmd {
-			case "FOCUS":
-				mu.Lock()
-				c := controller
-				mu.Unlock()
-				if c != nil {
-					c.Focus()
+	// Read commands from the parent on stdin (only when spawned by host).
+	if !selfLaunched {
+		go func() {
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				cmd := strings.TrimSpace(scanner.Text())
+				switch cmd {
+				case "FOCUS":
+					mu.Lock()
+					c := controller
+					mu.Unlock()
+					if c != nil {
+						c.Focus()
+					}
+				case "SHOW":
+					lifecycle.show()
+				case "CLOSE":
+					stop()
+					return
 				}
-			case "SHOW":
-				lifecycle.show()
-			case "CLOSE":
-				stop()
-				return
 			}
-		}
-		// stdin closed (parent exited) — shut down.
-		stop()
-	}()
+			// stdin closed (parent exited) — shut down.
+			stop()
+		}()
+	}
 
 	// Signal readiness to the parent process by writing to stdout.
 	ready := func(c webview.Controller) {
@@ -89,15 +104,16 @@ func main() {
 		// Platform-specific post-creation setup (window delegate on darwin).
 		lifecycle.onReady(c)
 
-		fmt.Fprintln(os.Stdout, "READY")
+		if !selfLaunched {
+			fmt.Fprintln(os.Stdout, "READY")
+		}
 		if c != nil {
 			c.Focus()
 		}
 	}
 
-	log.SetPrefix("[vortex-window] ")
-	log.Printf("starting native webview host for %s", *url)
-	webview.OpenWithContextAndReady(ctx, *title, *url, *width, *height, ready)
+	log.Printf("starting native webview host for %s", targetURL)
+	webview.OpenWithContextAndReady(ctx, *title, targetURL, *width, *height, ready)
 	if !readySent {
 		log.Printf("native webview host returned before READY")
 		os.Exit(1)
