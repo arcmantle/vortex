@@ -1,0 +1,30 @@
+CompileFlags:
+  CompilationDatabase: None
+
+# Suppress diagnostics for platform-specific CGo files whose headers
+# aren't available on the current OS. On the native platform these
+# files produce no errors, so the suppress is a harmless no-op.
+
+---
+If:
+  PathMatch: .*_darwin\.(c|m|h)
+CompileFlags:
+  Add: [-ferror-limit=0]
+Diagnostics:
+  Suppress: '*'
+
+---
+If:
+  PathMatch: .*_windows\.(c|cpp|h)
+CompileFlags:
+  Add: [-ferror-limit=0]
+Diagnostics:
+  Suppress: '*'
+
+---
+If:
+  PathMatch: .*_linux\.(c|cpp|h)
+CompileFlags:
+  Add: [-ferror-limit=0]
+Diagnostics:
+  Suppress: '*'
