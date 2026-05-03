@@ -155,6 +155,11 @@ func runInstall(installDir string, alreadyInstalled bool) {
 		} else {
 			doneCh <- doInstall(installDir, version, progressCh)
 		}
+		// Wait for the user to click "Launch Vortex" or close the window.
+		select {
+		case <-actionCh:
+		case <-ctx.Done():
+		}
 		cancel()
 	}()
 
@@ -446,6 +451,20 @@ h1 {
   color: #a0a0c0;
   text-align: center;
 }
+.btn {
+  padding: 0.6rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: none;
+  margin-top: 1rem;
+}
+.btn-primary {
+  background: #6366f1;
+  color: #fff;
+}
+.btn-primary:hover { background: #5558e6; }
 </style>
 </head>
 <body>
@@ -455,9 +474,11 @@ h1 {
   <div class="progress-bar" id="bar"></div>
 </div>
 <p class="status" id="status">Preparing...</p>
+<button class="btn btn-primary" id="launch-btn" onclick="doLaunch()">Launch Vortex</button>
 <script>
 const bar = document.getElementById('bar');
 const status = document.getElementById('status');
+const launchBtn = document.getElementById('launch-btn');
 const evtSource = new EventSource('/progress');
 evtSource.onmessage = (e) => {
   const data = JSON.parse(e.data);
@@ -465,10 +486,18 @@ evtSource.onmessage = (e) => {
   if (data.progress >= 0) {
     bar.style.width = data.progress + '%';
   }
+  if (data.progress >= 100) {
+    evtSource.close();
+    launchBtn.style.display = 'inline-block';
+    status.style.display = 'none';
+  }
 };
 evtSource.onerror = () => {
   evtSource.close();
 };
+function doLaunch() {
+  fetch('/action?action=launch');
+}
 </script>
 </body>
 </html>`
