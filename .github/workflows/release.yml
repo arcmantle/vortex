@@ -193,16 +193,65 @@ jobs:
           pattern: binaries-*
           merge-multiple: true
 
+      - name: Bundle platform archives
+        run: |
+          mkdir -p stage
+
+          bundle_tar() {
+            local goos=$1 goarch=$2
+            local archive="vortex-${goos}-${goarch}.tar.gz"
+            mkdir -p "stage/${goos}-${goarch}"
+            cp "artifacts/vortex-host-${goos}-${goarch}"   "stage/${goos}-${goarch}/vortex-host"
+            cp "artifacts/vortex-${goos}-${goarch}"        "stage/${goos}-${goarch}/vortex"
+            tar -czf "$archive" -C "stage/${goos}-${goarch}" vortex-host vortex
+          }
+
+          bundle_zip() {
+            local goos=$1 goarch=$2
+            local archive="vortex-${goos}-${goarch}.zip"
+            mkdir -p "stage/${goos}-${goarch}"
+            cp "artifacts/vortex-host-${goos}-${goarch}.exe" "stage/${goos}-${goarch}/vortex-host.exe"
+            cp "artifacts/vortex-${goos}-${goarch}.exe"      "stage/${goos}-${goarch}/vortex.exe"
+            zip -j "$archive" \
+              "stage/${goos}-${goarch}/vortex-host.exe" \
+              "stage/${goos}-${goarch}/vortex.exe"
+          }
+
+          bundle_zip windows amd64
+          bundle_zip windows arm64
+          bundle_tar linux   amd64
+          bundle_tar darwin  arm64
+
       - name: Generate checksums
         run: |
-          cd artifacts
-          sha256sum vortex-* Vortex-*.dmg 2>/dev/null > vortex-checksums.txt || \
-          sha256sum vortex-* > vortex-checksums.txt
+          sha256sum \
+            vortex-windows-amd64.zip \
+            vortex-windows-arm64.zip \
+            vortex-linux-amd64.tar.gz \
+            vortex-darwin-arm64.tar.gz \
+            artifacts/vortex-setup-windows-amd64.exe \
+            artifacts/vortex-setup-windows-arm64.exe \
+            artifacts/vortex-setup-linux-amd64 \
+            artifacts/Vortex-*.dmg 2>/dev/null \
+            | sed 's|artifacts/||g' \
+            > vortex-checksums.txt
 
       - name: List artifacts
-        run: ls -lR artifacts/
+        run: |
+          echo "=== Archives ===" && ls -lh vortex-*.zip vortex-*.tar.gz
+          echo "=== Installers ===" && ls -lh artifacts/vortex-setup-* artifacts/Vortex-*.dmg 2>/dev/null || true
+          echo "=== Checksums ===" && cat vortex-checksums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/*
+          files: |
+            vortex-windows-amd64.zip
+            vortex-windows-arm64.zip
+            vortex-linux-amd64.tar.gz
+            vortex-darwin-arm64.tar.gz
+            artifacts/vortex-setup-windows-amd64.exe
+            artifacts/vortex-setup-windows-arm64.exe
+            artifacts/vortex-setup-linux-amd64
+            artifacts/Vortex-*.dmg
+            vortex-checksums.txt

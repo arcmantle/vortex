@@ -4,7 +4,10 @@
 package release
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -143,6 +146,137 @@ func BinaryName(base string) string {
 		return base + ".exe"
 	}
 	return base
+}
+
+// ArchiveName returns the platform-specific release archive filename for a
+// given OS and architecture. Windows uses .zip; all other platforms use .tar.gz.
+func ArchiveName(goos, goarch string) string {
+	if goos == "windows" {
+		return fmt.Sprintf("vortex-%s-%s.zip", goos, goarch)
+	}
+	return fmt.Sprintf("vortex-%s-%s.tar.gz", goos, goarch)
+}
+
+// ExtractBinaries extracts named files from a zip or tar.gz archive into
+// temporary files in tempDir. Only files whose base name appears in names are
+// extracted. It returns a map of base name → temp file path. The caller is
+// responsible for removing the temp files on error or after installation.
+func ExtractBinaries(archivePath, tempDir string, names []string) (map[string]string, error) {
+	allowed := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		allowed[n] = struct{}{}
+	}
+	if strings.HasSuffix(archivePath, ".zip") {
+		return extractFromZip(archivePath, tempDir, allowed)
+	}
+	return extractFromTarGz(archivePath, tempDir, allowed)
+}
+
+func extractFromZip(archivePath, tempDir string, allowed map[string]struct{}) (map[string]string, error) {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("open zip: %w", err)
+	}
+	defer r.Close()
+
+	result := make(map[string]string, len(allowed))
+	for _, f := range r.File {
+		base := filepath.Base(f.Name)
+		if _, ok := allowed[base]; !ok {
+			continue
+		}
+		tmpPath, err := extractZipEntry(f, tempDir)
+		if err != nil {
+			for _, p := range result {
+				os.Remove(p)
+			}
+			return nil, err
+		}
+		result[base] = tmpPath
+	}
+	return result, nil
+}
+
+func extractZipEntry(f *zip.File, tempDir string) (string, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return "", fmt.Errorf("open zip entry %q: %w", f.Name, err)
+	}
+	defer rc.Close()
+
+	tmp, err := os.CreateTemp(tempDir, "vortex-*.extract")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	if _, err := io.Copy(tmp, rc); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("extract %q: %w", f.Name, err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("close extracted file: %w", err)
+	}
+	return tmp.Name(), nil
+}
+
+func extractFromTarGz(archivePath, tempDir string, allowed map[string]struct{}) (map[string]string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("open archive: %w", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, fmt.Errorf("open gzip stream: %w", err)
+	}
+	defer gz.Close()
+
+	result := make(map[string]string, len(allowed))
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			for _, p := range result {
+				os.Remove(p)
+			}
+			return nil, fmt.Errorf("read tar entry: %w", err)
+		}
+		base := filepath.Base(hdr.Name)
+		if _, ok := allowed[base]; !ok {
+			continue
+		}
+		tmpPath, err := extractTarEntry(tr, tempDir)
+		if err != nil {
+			for _, p := range result {
+				os.Remove(p)
+			}
+			return nil, err
+		}
+		result[base] = tmpPath
+	}
+	return result, nil
+}
+
+func extractTarEntry(r io.Reader, tempDir string) (string, error) {
+	tmp, err := os.CreateTemp(tempDir, "vortex-*.extract")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	if _, err := io.Copy(tmp, r); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("extract tar entry: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("close extracted file: %w", err)
+	}
+	return tmp.Name(), nil
 }
 
 // --- Download ---

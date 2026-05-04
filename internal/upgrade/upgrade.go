@@ -57,32 +57,20 @@ func Run(args []string, opts Options) error {
 		return err
 	}
 
-	// Resolve both binary assets.
-	type binaryInfo struct {
-		name      string
-		assetName string
-		asset     *release.ReleaseAsset
-		checksum  string
-		target    string
-	}
-	binaries := []binaryInfo{
-		{name: "vortex-host", assetName: release.AssetName("vortex-host", runtime.GOOS, runtime.GOARCH), target: hostTargetPath},
-		{name: "vortex", assetName: release.AssetName("vortex", runtime.GOOS, runtime.GOARCH), target: filepath.Join(installDir, release.BinaryName("vortex"))},
-	}
+	archiveName := release.ArchiveName(runtime.GOOS, runtime.GOARCH)
 
 	assetMap := map[string]*release.ReleaseAsset{}
 	for i := range latest.Assets {
 		assetMap[latest.Assets[i].Name] = &latest.Assets[i]
 	}
-	for i := range binaries {
-		binaries[i].asset = assetMap[binaries[i].assetName]
-		if binaries[i].asset == nil {
-			var available []string
-			for _, a := range latest.Assets {
-				available = append(available, a.Name)
-			}
-			return fmt.Errorf("latest release %s does not include %s; available: %s", latest.TagName, binaries[i].assetName, strings.Join(available, ", "))
+
+	archiveAsset := assetMap[archiveName]
+	if archiveAsset == nil {
+		var available []string
+		for _, a := range latest.Assets {
+			available = append(available, a.Name)
 		}
+		return fmt.Errorf("latest release %s does not include %s; available: %s", latest.TagName, archiveName, strings.Join(available, ", "))
 	}
 
 	checksumAsset := assetMap[release.ChecksumAssetName]
@@ -90,17 +78,23 @@ func Run(args []string, opts Options) error {
 		return fmt.Errorf("latest release %s does not include %s", latest.TagName, release.ChecksumAssetName)
 	}
 
-	// Fetch checksums for all binaries.
 	checksums, err := release.FetchChecksums(checksumAsset.BrowserDownloadURL, "vortex-upgrade")
 	if err != nil {
 		return err
 	}
-	for i := range binaries {
-		sum, ok := checksums[binaries[i].assetName]
-		if !ok {
-			return fmt.Errorf("checksum file does not contain entry for %s", binaries[i].assetName)
-		}
-		binaries[i].checksum = sum
+	archiveChecksum, ok := checksums[archiveName]
+	if !ok {
+		return fmt.Errorf("checksum file does not contain entry for %s", archiveName)
+	}
+
+	// Targets for the two binaries inside the archive.
+	type binaryInfo struct {
+		archiveName string // name inside the archive
+		target      string // installed path
+	}
+	binaries := []binaryInfo{
+		{release.BinaryName("vortex-host"), hostTargetPath},
+		{release.BinaryName("vortex"), filepath.Join(installDir, release.BinaryName("vortex"))},
 	}
 
 	currentVersion := release.NormalizeVersion(opts.CurrentVersion)
@@ -114,9 +108,7 @@ func Run(args []string, opts Options) error {
 		fmt.Printf("Release page: %s\n", latest.HTMLURL)
 		fmt.Printf("Install directory: %s\n", installDir)
 		fmt.Printf("Current executable: %s\n", currentPath)
-		for _, b := range binaries {
-			fmt.Printf("Release asset: %s (checksum: %s)\n", b.assetName, b.checksum)
-		}
+		fmt.Printf("Release archive: %s (checksum: %s)\n", archiveName, archiveChecksum)
 		fmt.Printf("Managed install location already in use: %t\n", sameInstallPath)
 		fmt.Printf("PATH already contains install dir: %t\n", pathConfigured)
 		if upToDate {
@@ -141,20 +133,37 @@ func Run(args []string, opts Options) error {
 		fmt.Fprintf(os.Stderr, "warning: could not stop active vortex instance: %v\n", err)
 	}
 
-	// Download and install each binary.
-	for _, b := range binaries {
-		fmt.Printf("Downloading %s...\n", b.assetName)
-		tmpPath, actualChecksum, err := release.DownloadAsset(b.asset.BrowserDownloadURL, installDir, "vortex-upgrade")
-		if err != nil {
-			return err
-		}
-		if actualChecksum != b.checksum {
-			os.Remove(tmpPath)
-			return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", b.assetName, b.checksum, actualChecksum)
-		}
-		fmt.Printf("Verified SHA-256 for %s\n", b.assetName)
+	// Download and verify the platform archive.
+	fmt.Printf("Downloading %s...\n", archiveName)
+	tmpArchive, actualChecksum, err := release.DownloadAsset(archiveAsset.BrowserDownloadURL, installDir, "vortex-upgrade")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpArchive)
 
-		isHostBinary := b.name == "vortex-host"
+	if actualChecksum != archiveChecksum {
+		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", archiveName, archiveChecksum, actualChecksum)
+	}
+	fmt.Printf("Verified SHA-256 for %s\n", archiveName)
+
+	// Extract binaries from the archive to temp files.
+	extractNames := make([]string, len(binaries))
+	for i, b := range binaries {
+		extractNames[i] = b.archiveName
+	}
+	extracted, err := release.ExtractBinaries(tmpArchive, installDir, extractNames)
+	if err != nil {
+		return fmt.Errorf("extract binaries: %w", err)
+	}
+
+	// Install each binary using the same per-OS logic as before.
+	for _, b := range binaries {
+		tmpPath, ok := extracted[b.archiveName]
+		if !ok {
+			return fmt.Errorf("archive did not contain %s", b.archiveName)
+		}
+
+		isHostBinary := b.archiveName == release.BinaryName("vortex-host")
 		if runtime.GOOS == "windows" {
 			if isHostBinary && sameInstallPath {
 				if err := scheduleWindowsReplacement(tmpPath, b.target, os.Getpid()); err != nil {
@@ -170,7 +179,7 @@ func Run(args []string, opts Options) error {
 			}
 		} else {
 			if err := os.Rename(tmpPath, b.target); err != nil {
-				return fmt.Errorf("install %s: %w", b.name, err)
+				return fmt.Errorf("install %s: %w", b.archiveName, err)
 			}
 			if err := release.FinalizeInstall(b.target); err != nil {
 				return err
