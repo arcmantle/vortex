@@ -89,6 +89,8 @@ func runInstall(installDir string, alreadyInstalled bool) {
 	progressCh := make(chan progressUpdate, 10)
 	doneCh := make(chan error, 1)
 	actionCh := make(chan string, 1)
+	installCh := make(chan struct{}, 1)
+	launched := false
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -101,7 +103,15 @@ func runInstall(installDir string, alreadyInstalled bool) {
 
 	mux.HandleFunc("/action", func(w http.ResponseWriter, r *http.Request) {
 		action := r.URL.Query().Get("action")
-		actionCh <- action
+		switch action {
+		case "install":
+			select {
+			case installCh <- struct{}{}:
+			default:
+			}
+		default:
+			actionCh <- action
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -150,6 +160,13 @@ func runInstall(installDir string, alreadyInstalled bool) {
 			}
 		}
 
+		// Wait for user to click "Install" or close the window.
+		select {
+		case <-installCh:
+		case <-ctx.Done():
+			return
+		}
+
 		if localDir != "" {
 			doneCh <- doLocalInstall(installDir, localDir, progressCh)
 		} else {
@@ -158,9 +175,9 @@ func runInstall(installDir string, alreadyInstalled bool) {
 		// Wait for the user to click "Launch Vortex" or close the window.
 		select {
 		case <-actionCh:
+			launched = true
 		case <-ctx.Done():
 		}
-		cancel()
 	}()
 
 	url := fmt.Sprintf("http://%s/", addr)
@@ -169,18 +186,21 @@ func runInstall(installDir string, alreadyInstalled bool) {
 		title = "Install Vortex"
 	}
 	webview.OpenWithContext(ctx, title, url, 460, 300)
+	cancel() // Window closed — unblock goroutine if it's waiting on ctx.Done().
 	wg.Wait()
 
-	// Check result and launch vortex on success.
-	select {
-	case err := <-doneCh:
-		if err != nil {
-			showError(fmt.Sprintf("Installation failed: %v", err))
-			return
+	// Launch only if the user explicitly clicked "Launch Vortex".
+	if launched {
+		select {
+		case err := <-doneCh:
+			if err != nil {
+				showError(fmt.Sprintf("Installation failed: %v", err))
+				return
+			}
+			vortexGUIBin := filepath.Join(installDir, release.BinaryName("vortex"))
+			launchVortex(vortexGUIBin)
+		default:
 		}
-		vortexGUIBin := filepath.Join(installDir, release.BinaryName("vortex"))
-		launchVortex(vortexGUIBin)
-	default:
 	}
 }
 
@@ -207,23 +227,18 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 		return err
 	}
 
-	hostAssetName := release.AssetName("vortex-host", runtime.GOOS, runtime.GOARCH)
-	windowAssetName := release.AssetName("vortex", runtime.GOOS, runtime.GOARCH)
+	archiveName := release.ArchiveName(runtime.GOOS, runtime.GOARCH)
 
 	assets := map[string]*release.ReleaseAsset{}
 	for i := range rel.Assets {
 		assets[rel.Assets[i].Name] = &rel.Assets[i]
 	}
 
-	hostAsset := assets[hostAssetName]
-	windowAsset := assets[windowAssetName]
+	archiveAsset := assets[archiveName]
 	checksumAsset := assets[release.ChecksumAssetName]
 
-	if hostAsset == nil {
-		return fmt.Errorf("release %s does not include %s", rel.TagName, hostAssetName)
-	}
-	if windowAsset == nil {
-		return fmt.Errorf("release %s does not include %s", rel.TagName, windowAssetName)
+	if archiveAsset == nil {
+		return fmt.Errorf("release %s does not include %s", rel.TagName, archiveName)
 	}
 	if checksumAsset == nil {
 		return fmt.Errorf("release %s does not include %s", rel.TagName, release.ChecksumAssetName)
@@ -235,29 +250,47 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 		return err
 	}
 
+	archiveChecksum := checksums[archiveName]
+	if archiveChecksum == "" {
+		return fmt.Errorf("checksum file does not contain entry for %s", archiveName)
+	}
+
+	progressCh <- progressUpdate{"Downloading Vortex...", 30}
+	tmpArchive, actualChecksum, err := release.DownloadAsset(archiveAsset.BrowserDownloadURL, installDir, "vortex-setup")
+	if err != nil {
+		return fmt.Errorf("download %s: %w", archiveName, err)
+	}
+	defer os.Remove(tmpArchive)
+
+	if actualChecksum != archiveChecksum {
+		return fmt.Errorf("checksum mismatch for %s", archiveName)
+	}
+
+	progressCh <- progressUpdate{"Extracting...", 60}
 	binaries := []struct {
 		name     string
-		asset    *release.ReleaseAsset
-		checksum string
 		target   string
 		progress int
 	}{
-		{"vortex-host", hostAsset, checksums[hostAssetName], filepath.Join(installDir, release.BinaryName("vortex-host")), 50},
-		{"vortex", windowAsset, checksums[windowAssetName], filepath.Join(installDir, release.BinaryName("vortex")), 80},
+		{"vortex-host" + exeSuffix(), filepath.Join(installDir, release.BinaryName("vortex-host")), 70},
+		{"vortex" + exeSuffix(), filepath.Join(installDir, release.BinaryName("vortex")), 80},
+	}
+
+	extractNames := make([]string, len(binaries))
+	for i, b := range binaries {
+		extractNames[i] = b.name
+	}
+	extracted, err := release.ExtractBinaries(tmpArchive, installDir, extractNames)
+	if err != nil {
+		return fmt.Errorf("extract binaries: %w", err)
 	}
 
 	for _, b := range binaries {
-		progressCh <- progressUpdate{fmt.Sprintf("Downloading %s...", b.name), b.progress}
-
-		tmpPath, actualChecksum, err := release.DownloadAsset(b.asset.BrowserDownloadURL, installDir, "vortex-setup")
-		if err != nil {
-			return fmt.Errorf("download %s: %w", b.name, err)
+		tmpPath, ok := extracted[b.name]
+		if !ok {
+			return fmt.Errorf("archive did not contain %s", b.name)
 		}
-		if actualChecksum != b.checksum {
-			os.Remove(tmpPath)
-			return fmt.Errorf("checksum mismatch for %s", b.name)
-		}
-
+		progressCh <- progressUpdate{fmt.Sprintf("Installing %s...", b.name), b.progress}
 		if err := installBinary(tmpPath, b.target); err != nil {
 			return fmt.Errorf("install %s: %w", b.name, err)
 		}
@@ -281,6 +314,13 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 
 	progressCh <- progressUpdate{"Done!", 100}
 	return nil
+}
+
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }
 
 // doLocalInstall copies pre-built binaries from a local directory instead of
@@ -438,6 +478,7 @@ h1 {
   overflow: hidden;
   height: 8px;
   margin-bottom: 1rem;
+  display: none;
 }
 .progress-bar {
   height: 100%;
@@ -450,6 +491,7 @@ h1 {
   font-size: 0.85rem;
   color: #a0a0c0;
   text-align: center;
+  display: none;
 }
 .btn {
   padding: 0.6rem 1.5rem;
@@ -457,7 +499,6 @@ h1 {
   border-radius: 6px;
   font-size: 0.9rem;
   cursor: pointer;
-  display: none;
   margin-top: 1rem;
 }
 .btn-primary {
@@ -468,33 +509,44 @@ h1 {
 </style>
 </head>
 <body>
-<h1>Setting up Vortex</h1>
+<h1>Install Vortex</h1>
 <p class="subtitle" id="version"></p>
-<div class="progress-container">
+<div class="progress-container" id="progress-container">
   <div class="progress-bar" id="bar"></div>
 </div>
 <p class="status" id="status">Preparing...</p>
-<button class="btn btn-primary" id="launch-btn" onclick="doLaunch()">Launch Vortex</button>
+<button class="btn btn-primary" id="action-btn" onclick="doInstall()">Install</button>
 <script>
 const bar = document.getElementById('bar');
 const status = document.getElementById('status');
-const launchBtn = document.getElementById('launch-btn');
-const evtSource = new EventSource('/progress');
-evtSource.onmessage = (e) => {
-  const data = JSON.parse(e.data);
-  status.textContent = data.step;
-  if (data.progress >= 0) {
-    bar.style.width = data.progress + '%';
-  }
-  if (data.progress >= 100) {
+const actionBtn = document.getElementById('action-btn');
+const progressContainer = document.getElementById('progress-container');
+
+function doInstall() {
+  actionBtn.style.display = 'none';
+  progressContainer.style.display = 'block';
+  status.style.display = 'block';
+  fetch('/action?action=install');
+  const evtSource = new EventSource('/progress');
+  evtSource.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    status.textContent = data.step;
+    if (data.progress >= 0) {
+      bar.style.width = data.progress + '%';
+    }
+    if (data.progress >= 100) {
+      evtSource.close();
+      actionBtn.textContent = 'Launch Vortex';
+      actionBtn.onclick = doLaunch;
+      actionBtn.style.display = 'inline-block';
+      status.style.display = 'none';
+    }
+  };
+  evtSource.onerror = () => {
     evtSource.close();
-    launchBtn.style.display = 'inline-block';
-    status.style.display = 'none';
-  }
-};
-evtSource.onerror = () => {
-  evtSource.close();
-};
+  };
+}
+
 function doLaunch() {
   fetch('/action?action=launch');
 }
