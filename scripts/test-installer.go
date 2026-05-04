@@ -98,11 +98,17 @@ func buildMacOS() {
 
 	step("Creating DMG")
 	dmgPath := filepath.Join(workDir, "Vortex.dmg")
-	run("go", "run", "scripts/create-dmg.go",
+	dmgCmd := exec.Command("go", "run", "create-dmg.go",
 		"--version", "0.0.0-local",
 		"--app-dir", filepath.Join(workDir, "Vortex.app"),
 		"--output", dmgPath,
 	)
+	dmgCmd.Dir = "scripts"
+	dmgCmd.Stdout = os.Stdout
+	dmgCmd.Stderr = os.Stderr
+	if err := dmgCmd.Run(); err != nil {
+		fatal("go run create-dmg.go failed: %v", err)
+	}
 
 	success("DMG ready: %s", dmgPath)
 	fmt.Println()

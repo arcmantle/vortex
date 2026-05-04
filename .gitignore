@@ -16,3 +16,4 @@ cmd/vortex-ui/web/wailsjs/*.exe
 /vortex-window
 /vortex-setup
 *.dmg
+/create-dmg

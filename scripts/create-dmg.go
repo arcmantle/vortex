@@ -1,10 +1,12 @@
 //go:build ignore
 
-// create-dmg creates a macOS .dmg with Vortex.app and an Applications symlink.
+// create-dmg creates a styled macOS .dmg installer using sindresorhus/create-dmg.
+//
+// Requires: Node.js (uses npx to run sindresorhus/create-dmg)
 //
 // Usage:
 //
-//	go run scripts/create-dmg.go [--version VERSION] [--app-dir PATH] [--output PATH]
+//	go run create-dmg.go [--version VERSION] [--app-dir PATH] [--output PATH]
 package main
 
 import (
@@ -18,63 +20,53 @@ import (
 func main() {
 	version := flag.String("version", "dev", "version string for the DMG filename")
 	appDir := flag.String("app-dir", "./dist/Vortex.app", "path to the .app bundle")
-	output := flag.String("output", "", "output DMG path (default: ./dist/Vortex-VERSION.dmg)")
+	output := flag.String("output", "", "output DMG path (default: Vortex-VERSION.dmg)")
 	flag.Parse()
 
 	if *output == "" {
-		*output = fmt.Sprintf("./dist/Vortex-%s.dmg", *version)
+		*output = fmt.Sprintf("Vortex-%s.dmg", *version)
 	}
 
 	if _, err := os.Stat(*appDir); err != nil {
-		fatal("app directory %s does not exist — run create-app-bundle.go first", *appDir)
+		fmt.Fprintf(os.Stderr, "error: app directory %s does not exist — run create-app-bundle.go first\n", *appDir)
+		os.Exit(1)
 	}
 
-	fmt.Printf("Creating DMG: %s (version: %s)\n", *output, *version)
-
-	// Create a temporary staging directory.
-	staging, err := os.MkdirTemp("", "vortex-dmg-*")
+	absApp, err := filepath.Abs(*appDir)
 	must(err)
-	defer os.RemoveAll(staging)
+	absOutput, err := filepath.Abs(*output)
+	must(err)
 
-	// Copy the app bundle into staging.
-	run("cp", "-R", *appDir, filepath.Join(staging, "Vortex.app"))
+	fmt.Printf("Creating DMG: %s (version: %s)\n", absOutput, *version)
 
-	// Create Applications symlink.
-	must(os.Symlink("/Applications", filepath.Join(staging, "Applications")))
+	// create-dmg writes the DMG into the destination directory.
+	outDir := filepath.Dir(absOutput)
+	must(os.MkdirAll(outDir, 0o755))
 
-	// Create the DMG with zlib compression.
-	must(os.MkdirAll(filepath.Dir(*output), 0o755))
-	os.Remove(*output) // remove existing if present
-
-	run("hdiutil", "create",
-		"-volname", "Vortex",
-		"-srcfolder", staging,
-		"-ov",
-		"-format", "UDZO",
-		"-imagekey", "zlib-level=9",
-		*output,
+	cmd := exec.Command("npx", "create-dmg",
+		"--overwrite",
+		"--dmg-title", "Vortex",
+		"--no-code-sign",
+		absApp,
+		outDir,
 	)
-
-	fmt.Printf("✓ Created %s\n", *output)
-	fmt.Printf("\nTo verify: hdiutil verify %s\n", *output)
-}
-
-func run(name string, args ...string) {
-	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fatal("%s failed: %v", name, err)
+	must(cmd.Run())
+
+	// create-dmg generates the filename as "AppName X.Y.Z.dmg" using the
+	// version from Info.plist. Rename to the requested output name.
+	matches, _ := filepath.Glob(filepath.Join(outDir, "Vortex *.dmg"))
+	if len(matches) == 1 && matches[0] != absOutput {
+		must(os.Rename(matches[0], absOutput))
 	}
+
+	fmt.Printf("✓ Created %s\n", absOutput)
 }
 
 func must(err error) {
 	if err != nil {
-		fatal("%v", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
-}
-
-func fatal(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
-	os.Exit(1)
 }

@@ -1,0 +1,12 @@
+{
+	"name": "vortex-scripts",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"build-local-windows-arm64": "cd .. && go run scripts/build-local-windows-arm64.go",
+		"create-app-bundle": "cd .. && go run scripts/create-app-bundle.go",
+		"create-dmg": "go run create-dmg.go",
+		"generate-icons": "cd .. && go run scripts/generate-icons.go",
+		"test-installer": "cd .. && go run scripts/test-installer.go"
+	}
+}
