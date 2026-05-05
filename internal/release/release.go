@@ -182,10 +182,45 @@ func ExtractBinaries(archivePath, tempDir string, names []string) (map[string]st
 	for _, n := range names {
 		allowed[n] = struct{}{}
 	}
-	if strings.HasSuffix(archivePath, ".zip") {
+	archiveType, err := detectArchiveType(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	if archiveType == "zip" {
 		return extractFromZip(archivePath, tempDir, allowed)
 	}
 	return extractFromTarGz(archivePath, tempDir, allowed)
+}
+
+func detectArchiveType(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open archive: %w", err)
+	}
+	defer f.Close()
+
+	header := make([]byte, 4)
+	n, err := io.ReadFull(f, header)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", fmt.Errorf("read archive header: %w", err)
+	}
+	header = header[:n]
+
+	if len(header) >= 4 && header[0] == 'P' && header[1] == 'K' {
+		return "zip", nil
+	}
+	if len(header) >= 2 && header[0] == 0x1f && header[1] == 0x8b {
+		return "tar.gz", nil
+	}
+
+	if strings.HasSuffix(path, ".zip") {
+		return "zip", nil
+	}
+	if strings.HasSuffix(path, ".tar.gz") || strings.HasSuffix(path, ".tgz") {
+		return "tar.gz", nil
+	}
+
+	return "", fmt.Errorf("unsupported archive format: %s", filepath.Base(path))
 }
 
 func extractFromZip(archivePath, tempDir string, allowed map[string]struct{}) (map[string]string, error) {
