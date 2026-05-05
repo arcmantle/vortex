@@ -34,6 +34,11 @@ import (
 var Version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--cleanup-self" {
+		runCleanupHelper(os.Args[2:])
+		return
+	}
+
 	// Detect uninstall mode: --uninstall flag or binary named "uninstall".
 	uninstallMode := false
 	for _, arg := range os.Args[1:] {
@@ -61,9 +66,9 @@ func main() {
 		return
 	}
 
-	vortexHostBin := filepath.Join(installDir, release.BinaryName("vortex-host"))
-	vortexGUIBin := filepath.Join(installDir, release.BinaryName("vortex"))
-	alreadyInstalled := fileExists(vortexHostBin)
+	vortexHostBin := filepath.Join(installDir, release.ManagedHostBinaryName())
+	vortexGUIBin := filepath.Join(installDir, release.ManagedGUIBinaryName())
+	alreadyInstalled := fileExists(vortexHostBin) && fileExists(vortexGUIBin)
 
 	// macOS: if already installed, skip the UI — just launch the GUI directly.
 	// The GUI will spawn the host if needed. The launcher calls us on every
@@ -143,17 +148,31 @@ func runInstall(installDir string, alreadyInstalled bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var controllerMu sync.Mutex
+	var controller webview.Controller
+	closeInstaller := func() {
+		controllerMu.Lock()
+		c := controller
+		controllerMu.Unlock()
+		if c != nil {
+			c.Close()
+			return
+		}
+		cancel()
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		waitForInstall := true
 
 		if alreadyInstalled {
 			// Wait for user's choice (Windows path — macOS skips this).
 			action := <-actionCh
 			switch action {
 			case "reinstall":
-				// Continue with install.
+				waitForInstall = false
 			default:
 				cancel()
 				return
@@ -161,10 +180,12 @@ func runInstall(installDir string, alreadyInstalled bool) {
 		}
 
 		// Wait for user to click "Install" or close the window.
-		select {
-		case <-installCh:
-		case <-ctx.Done():
-			return
+		if waitForInstall {
+			select {
+			case <-installCh:
+			case <-ctx.Done():
+				return
+			}
 		}
 
 		if localDir != "" {
@@ -174,8 +195,9 @@ func runInstall(installDir string, alreadyInstalled bool) {
 		}
 		// Wait for the user to click "Launch Vortex" or close the window.
 		select {
-		case <-actionCh:
-			launched = true
+		case action := <-actionCh:
+			launched = action == "launch"
+			closeInstaller()
 		case <-ctx.Done():
 		}
 	}()
@@ -185,7 +207,11 @@ func runInstall(installDir string, alreadyInstalled bool) {
 	if runtime.GOOS == "windows" {
 		title = "Install Vortex"
 	}
-	webview.OpenWithContext(ctx, title, url, 460, 300)
+	webview.OpenDialogWithContextAndReady(ctx, title, url, 460, 300, func(c webview.Controller) {
+		controllerMu.Lock()
+		controller = c
+		controllerMu.Unlock()
+	})
 	cancel() // Window closed — unblock goroutine if it's waiting on ctx.Done().
 	wg.Wait()
 
@@ -197,7 +223,7 @@ func runInstall(installDir string, alreadyInstalled bool) {
 				showError(fmt.Sprintf("Installation failed: %v", err))
 				return
 			}
-			vortexGUIBin := filepath.Join(installDir, release.BinaryName("vortex"))
+			vortexGUIBin := filepath.Join(installDir, release.ManagedGUIBinaryName())
 			launchVortex(vortexGUIBin)
 		default:
 		}
@@ -272,8 +298,8 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 		target   string
 		progress int
 	}{
-		{"vortex-host" + exeSuffix(), filepath.Join(installDir, release.BinaryName("vortex-host")), 70},
-		{"vortex" + exeSuffix(), filepath.Join(installDir, release.BinaryName("vortex")), 80},
+		{"vortex-host" + exeSuffix(), filepath.Join(installDir, release.ManagedHostBinaryName()), 70},
+		{"vortex" + exeSuffix(), filepath.Join(installDir, release.ManagedGUIBinaryName()), 80},
 	}
 
 	extractNames := make([]string, len(binaries))
@@ -296,20 +322,14 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 		}
 	}
 
+	if err := installWindowsUninstaller(installDir); err != nil {
+		return err
+	}
+
 	// Platform-specific post-install (shortcuts, registry, PATH).
 	progressCh <- progressUpdate{"Configuring system...", 90}
 	if err := platformPostInstall(installDir); err != nil {
 		return fmt.Errorf("post-install: %w", err)
-	}
-
-	// On Windows, copy ourselves as uninstall.exe alongside the binaries.
-	if runtime.GOOS == "windows" {
-		progressCh <- progressUpdate{"Finalizing...", 95}
-		selfPath, err := os.Executable()
-		if err == nil {
-			uninstallPath := filepath.Join(installDir, "uninstall"+filepath.Ext(selfPath))
-			release.CopyFile(selfPath, uninstallPath)
-		}
 	}
 
 	progressCh <- progressUpdate{"Done!", 100}
@@ -334,15 +354,16 @@ func doLocalInstall(installDir, localDir string, progressCh chan<- progressUpdat
 
 	binaries := []struct {
 		name     string
+		target   string
 		progress int
 	}{
-		{"vortex-host", 30},
-		{"vortex", 70},
+		{"vortex-host", filepath.Join(installDir, release.ManagedHostBinaryName()), 30},
+		{"vortex", filepath.Join(installDir, release.ManagedGUIBinaryName()), 70},
 	}
 
 	for _, b := range binaries {
 		src := filepath.Join(localDir, release.BinaryName(b.name))
-		dst := filepath.Join(installDir, release.BinaryName(b.name))
+		dst := b.target
 
 		progressCh <- progressUpdate{fmt.Sprintf("Installing %s...", b.name), b.progress}
 
@@ -359,6 +380,10 @@ func doLocalInstall(installDir, localDir string, progressCh chan<- progressUpdat
 		if err := release.FinalizeInstall(dst); err != nil {
 			return fmt.Errorf("finalize %s: %w", b.name, err)
 		}
+	}
+
+	if err := installWindowsUninstaller(installDir); err != nil {
+		return err
 	}
 
 	progressCh <- progressUpdate{"Configuring system...", 90}
@@ -381,6 +406,23 @@ func installBinary(tmpPath, targetPath string) error {
 		return fmt.Errorf("rename: %w", err)
 	}
 	return release.FinalizeInstall(targetPath)
+}
+
+func installWindowsUninstaller(installDir string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate installer executable: %w", err)
+	}
+
+	uninstallPath := filepath.Join(installDir, "uninstall"+filepath.Ext(selfPath))
+	if err := release.CopyFile(selfPath, uninstallPath); err != nil {
+		return fmt.Errorf("install uninstaller: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +559,10 @@ h1 {
 <p class="status" id="status">Preparing...</p>
 <button class="btn btn-primary" id="action-btn" onclick="doInstall()">Install</button>
 <script>
+requestAnimationFrame(() => {
+	window.vortexAppReady?.();
+});
+
 const bar = document.getElementById('bar');
 const status = document.getElementById('status');
 const actionBtn = document.getElementById('action-btn');
@@ -548,7 +594,9 @@ function doInstall() {
 }
 
 function doLaunch() {
-  fetch('/action?action=launch');
+	fetch('/action?action=launch').then(() => {
+		window.close();
+	});
 }
 </script>
 </body>
@@ -583,6 +631,30 @@ h1 {
   color: #a0a0c0;
   margin-bottom: 2rem;
 }
+.progress-container {
+	width: 100%;
+	max-width: 320px;
+	background: #2a2a4a;
+	border-radius: 6px;
+	overflow: hidden;
+	height: 8px;
+	margin-bottom: 1rem;
+	display: none;
+}
+.progress-bar {
+	height: 100%;
+	background: linear-gradient(90deg, #6366f1, #8b5cf6);
+	width: 0%;
+	transition: width 0.3s ease;
+	border-radius: 6px;
+}
+.status {
+	font-size: 0.85rem;
+	color: #a0a0c0;
+	text-align: center;
+	display: none;
+	margin-bottom: 1rem;
+}
 .buttons {
   display: flex;
   gap: 0.75rem;
@@ -610,20 +682,64 @@ h1 {
 <body>
 <h1>Vortex is already installed</h1>
 <p class="subtitle">Would you like to reinstall?</p>
-<div class="buttons">
-  <button class="btn btn-primary" onclick="doAction('reinstall')">Reinstall</button>
-  <button class="btn btn-secondary" onclick="doAction('cancel')">Cancel</button>
+<div class="progress-container" id="progress-container">
+	<div class="progress-bar" id="bar"></div>
 </div>
+<p class="status" id="status">Preparing...</p>
+<div class="buttons" id="buttons">
+	<button class="btn btn-primary" id="reinstall-btn" onclick="doReinstall()">Reinstall</button>
+	<button class="btn btn-secondary" id="cancel-btn" onclick="doCancel()">Cancel</button>
+</div>
+<button class="btn btn-primary" id="launch-btn" onclick="doLaunch()" style="display:none;">Launch Vortex</button>
 <script>
-function doAction(action) {
-  fetch('/action?action=' + action).then(() => {
-    if (action === 'reinstall') {
-      document.body.innerHTML = '<h1>Reinstalling...</h1><p class="subtitle">Please wait.</p>';
-      setTimeout(() => { window.location.reload(); }, 500);
-    } else {
-      window.close();
-    }
-  });
+requestAnimationFrame(() => {
+	window.vortexAppReady?.();
+});
+
+const bar = document.getElementById('bar');
+const status = document.getElementById('status');
+const buttons = document.getElementById('buttons');
+const launchBtn = document.getElementById('launch-btn');
+const reinstallBtn = document.getElementById('reinstall-btn');
+const cancelBtn = document.getElementById('cancel-btn');
+const progressContainer = document.getElementById('progress-container');
+
+function doReinstall() {
+	reinstallBtn.disabled = true;
+	cancelBtn.disabled = true;
+	buttons.style.display = 'none';
+	progressContainer.style.display = 'block';
+	status.style.display = 'block';
+	fetch('/action?action=reinstall');
+
+	const evtSource = new EventSource('/progress');
+	evtSource.onmessage = (e) => {
+		const data = JSON.parse(e.data);
+		status.textContent = data.step;
+		if (data.progress >= 0) {
+			bar.style.width = data.progress + '%';
+		}
+		if (data.progress >= 100) {
+			evtSource.close();
+			status.style.display = 'none';
+			launchBtn.style.display = 'inline-block';
+		}
+	};
+	evtSource.onerror = () => {
+		evtSource.close();
+	};
+}
+
+function doLaunch() {
+	fetch('/action?action=launch').then(() => {
+		window.close();
+	});
+}
+
+function doCancel() {
+	fetch('/action?action=cancel').then(() => {
+		window.close();
+	});
 }
 </script>
 </body>

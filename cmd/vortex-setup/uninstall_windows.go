@@ -9,12 +9,23 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
+	"syscall"
+	"unsafe"
 
 	"arcmantle/vortex/internal/release"
 	"arcmantle/vortex/internal/webview"
 
 	"golang.org/x/sys/windows/registry"
+)
+
+const (
+	moveFileDelayUntilReboot = 0x00000004
+)
+
+var (
+	kernel32DLL      = syscall.NewLazyDLL("kernel32.dll")
+	procMoveFileExW  = kernel32DLL.NewProc("MoveFileExW")
 )
 
 // runUninstall shows a webview uninstall confirmation dialog and removes
@@ -71,16 +82,33 @@ func runUninstall() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var controllerMu sync.Mutex
+	var controller webview.Controller
+	closeDialog := func() {
+		controllerMu.Lock()
+		c := controller
+		controllerMu.Unlock()
+		if c != nil {
+			c.Close()
+			return
+		}
+		cancel()
+	}
+
 	go func() {
 		ua := <-actionCh
 		if ua.action == "confirm" {
 			performUninstall(installDir, ua.removeConfig)
 		}
-		cancel()
+		closeDialog()
 	}()
 
 	url := fmt.Sprintf("http://%s/", addr)
-	webview.OpenWithContext(ctx, "Uninstall Vortex", url, 420, 240)
+	webview.OpenDialogWithContextAndReady(ctx, "Uninstall Vortex", url, 420, 240, func(c webview.Controller) {
+		controllerMu.Lock()
+		controller = c
+		controllerMu.Unlock()
+	})
 }
 
 type uninstallAction struct {
@@ -90,7 +118,7 @@ type uninstallAction struct {
 
 func performUninstall(installDir string, removeConfig bool) {
 	// Remove binaries.
-	for _, name := range []string{"vortex.exe", "vortex-window.exe", "vortex.ico"} {
+	for _, name := range []string{release.ManagedHostBinaryName(), release.ManagedGUIBinaryName(), release.BinaryName("vortex-host"), "vortex.ico"} {
 		path := filepath.Join(installDir, name)
 		os.Remove(path)
 	}
@@ -114,38 +142,39 @@ func performUninstall(installDir string, removeConfig bool) {
 	}
 
 	// Note: we can't delete ourselves (uninstall.exe) while running.
-	// Schedule self-deletion via a short cmd /c ping delay.
+	// Launch a detached GUI helper from a temporary copy so it can remove the
+	// uninstaller and the now-empty install directory after this process exits.
 	selfPath, _ := os.Executable()
 	if selfPath != "" {
-		scheduleDeleteSelf(selfPath, installDir)
+		if err := scheduleDeleteSelf(selfPath, installDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: schedule self-delete failed: %v\n", err)
+		}
 	}
 }
 
-// scheduleDeleteSelf uses cmd.exe to delete the uninstaller and its directory
-// after a short delay (the process will have exited by then).
-func scheduleDeleteSelf(selfPath, installDir string) {
-	script := fmt.Sprintf(
-		`/c ping 127.0.0.1 -n 3 >nul & del /f /q "%s" & rmdir /q "%s"`,
-		selfPath, installDir,
+// scheduleDeleteSelf launches a detached helper that waits for this process to
+// exit, then removes uninstall.exe and the install directory.
+func scheduleDeleteSelf(selfPath, installDir string) error {
+	return launchCleanupHelper(selfPath, installDir)
+}
+
+func scheduleDeleteOnReboot(path string) error {
+	pathPtr, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("encode path %q: %w", path, err)
+	}
+	r1, _, callErr := procMoveFileExW.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		0,
+		uintptr(moveFileDelayUntilReboot),
 	)
-	cmd := cmdExec("cmd.exe", script)
-	_ = cmd
-}
-
-func cmdExec(name string, args ...string) *os.Process {
-	attr := &os.ProcAttr{
-		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	if r1 != 0 {
+		return nil
 	}
-	argv := append([]string{name}, args...)
-	_ = argv
-	_ = attr
-	// Note: in production this would use syscall.SysProcAttr with
-	// CREATE_NEW_PROCESS_GROUP. For now, stub.
-	return nil
-}
-
-func escapeStr(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
+	if callErr != syscall.Errno(0) {
+		return callErr
+	}
+	return fmt.Errorf("MoveFileExW failed for %s", path)
 }
 
 const uninstallHTML = `<!DOCTYPE html>
@@ -210,6 +239,10 @@ h1 {
   <button class="btn btn-secondary" onclick="doCancel()">Cancel</button>
 </div>
 <script>
+requestAnimationFrame(() => {
+	window.vortexAppReady?.();
+});
+
 function doUninstall() {
   const config = document.getElementById('config').checked;
   fetch('/action?action=confirm&config=' + config).then(() => window.close());

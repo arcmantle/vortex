@@ -52,21 +52,15 @@ func main() {
 }
 
 func doBuild() {
-	os.RemoveAll(workDir)
+	killVortex()
+	must(os.RemoveAll(workDir))
 	must(os.MkdirAll(workDir, 0o755))
 
-	// Rebuild the frontend UI so the embedded assets are current.
-	step("Building UI")
-	uiDir := filepath.Join("cmd", "vortex-ui", "web")
-	run("pnpm", "--dir", uiDir, "install", "--frozen-lockfile")
-	run("pnpm", "--dir", uiDir, "build")
+	step("Building local installer artifacts")
+	run("go", "run", "build.go", "-local", "-ui")
 
-	// Build the two binaries that get "installed" by the bootstrap/installer.
-	step("Building vortex-host")
-	goBuild(filepath.Join(workDir, binaryName("vortex-host")), "./cmd/vortex/")
-
-	step("Building vortex")
-	goBuild(filepath.Join(workDir, binaryName("vortex")), "./cmd/vortex-window/")
+	copyBuiltBinary("vortex-host", filepath.Join(workDir, binaryName("vortex-host")))
+	copyBuiltBinary("vortex", filepath.Join(workDir, binaryName("vortex")))
 
 	switch runtime.GOOS {
 	case "darwin":
@@ -79,8 +73,7 @@ func doBuild() {
 }
 
 func buildMacOS() {
-	step("Building vortex-setup")
-	goBuild(filepath.Join(workDir, "vortex-setup"), "./cmd/vortex-setup/")
+	copyBuiltBinary("vortex-setup", filepath.Join(workDir, "vortex-setup"))
 
 	step("Creating .app bundle")
 	run("go", "run", "scripts/create-app-bundle.go",
@@ -120,8 +113,7 @@ func buildMacOS() {
 }
 
 func buildWindows() {
-	step("Building vortex-setup")
-	goBuild(filepath.Join(workDir, binaryName("vortex-setup")), "./cmd/vortex-setup/")
+	copyBuiltBinary("vortex-setup", filepath.Join(workDir, binaryName("vortex-setup")))
 
 	// Place binaries where the installer can find them via VORTEX_BOOTSTRAP_LOCAL.
 	binDir := filepath.Join(workDir, "binaries")
@@ -183,7 +175,7 @@ func uninstallVortex() {
 		installDir = filepath.Join(base, "Programs", "Vortex")
 	}
 
-	binaries := []string{"vortex-host", "vortex"}
+	binaries := []string{"vortex-host", "vortex", "vortex-window"}
 	removed := false
 	for _, name := range binaries {
 		p := filepath.Join(installDir, binaryName(name))
@@ -242,10 +234,11 @@ func killVortex() {
 			}
 		}
 	case "windows":
-		for _, name := range []string{"vortex.exe", "vortex-host.exe"} {
+		for _, name := range []string{"vortex.exe", "vortex-host.exe", "vortex-window.exe", "vortex-setup.exe", "uninstall.exe"} {
 			cmd := exec.Command("taskkill", "/F", "/IM", name)
-			cmd.Run()
-			killed = true
+			if cmd.Run() == nil {
+				killed = true
+			}
 		}
 	}
 	if killed {
@@ -279,13 +272,9 @@ func detachVortexDMG() {
 
 // --- helpers ---
 
-func goBuild(output, pkg string) {
-	cmd := exec.Command("go", "build", "-o", output, pkg)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fatal("go build %s failed: %v", pkg, err)
-	}
+func copyBuiltBinary(name, dst string) {
+	src := filepath.Join("bin", binaryName(name))
+	copyFileTo(src, dst)
 }
 
 func run(name string, args ...string) {

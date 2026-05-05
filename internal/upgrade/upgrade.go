@@ -44,7 +44,8 @@ func Run(args []string, opts Options) error {
 		}
 	}
 
-	hostTargetPath := filepath.Join(installDir, release.BinaryName("vortex-host"))
+	hostTargetPath := filepath.Join(installDir, release.ManagedHostBinaryName())
+	guiTargetPath := filepath.Join(installDir, release.ManagedGUIBinaryName())
 	currentPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate current executable: %w", err)
@@ -94,7 +95,7 @@ func Run(args []string, opts Options) error {
 	}
 	binaries := []binaryInfo{
 		{release.BinaryName("vortex-host"), hostTargetPath},
-		{release.BinaryName("vortex"), filepath.Join(installDir, release.BinaryName("vortex"))},
+		{release.BinaryName("vortex"), guiTargetPath},
 	}
 
 	currentVersion := release.NormalizeVersion(opts.CurrentVersion)

@@ -148,6 +148,22 @@ func BinaryName(base string) string {
 	return base
 }
 
+// ManagedHostBinaryName returns the installed host/CLI binary name.
+func ManagedHostBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return BinaryName("vortex")
+	}
+	return BinaryName("vortex-host")
+}
+
+// ManagedGUIBinaryName returns the installed GUI launcher binary name.
+func ManagedGUIBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return BinaryName("vortex-window")
+	}
+	return BinaryName("vortex")
+}
+
 // ArchiveName returns the platform-specific release archive filename for a
 // given OS and architecture. Windows uses .zip; all other platforms use .tar.gz.
 func ArchiveName(goos, goarch string) string {
@@ -458,6 +474,7 @@ if (-not $exists) {
 `, EscapePowerShellSingleQuotes(dir))
 
 	cmd := exec.Command(powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	configureBackgroundCommand(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

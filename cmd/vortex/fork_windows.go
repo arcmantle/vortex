@@ -14,6 +14,7 @@ import (
 const (
 	windowsDetachedProcess    = 0x00000008
 	windowsCreateNewProcGroup = 0x00000200
+	windowsCreateNoWindow     = 0x08000000
 )
 
 var (
@@ -38,7 +39,7 @@ func maybeFork() (bool, error) {
 	args := append(append([]string(nil), os.Args[1:]...), "--forked")
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windowsDetachedProcess | windowsCreateNewProcGroup,
+		CreationFlags: windowsDetachedProcess | windowsCreateNewProcGroup | windowsCreateNoWindow,
 		HideWindow:    true,
 	}
 	if err := cmd.Start(); err != nil {

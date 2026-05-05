@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"arcmantle/vortex/internal/instance"
@@ -66,31 +68,40 @@ func selfLaunchURL() (string, error) {
 	return "", fmt.Errorf("host did not become ready within %s", pollTimeout)
 }
 
-// resolveHostBinary locates the vortex-host binary next to this executable,
+// resolveHostBinary locates the installed host binary next to this executable,
 // then falls back to PATH.
 func resolveHostBinary() (string, error) {
+	candidates := []string{hostBinaryName}
+	if runtime.GOOS == "windows" {
+		candidates = []string{"vortex", hostBinaryName}
+	}
+
 	self, err := os.Executable()
 	if err == nil {
 		dir := filepath.Dir(self)
-		candidate := filepath.Join(dir, hostBinaryName)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
+		for _, base := range candidates {
+			candidate := filepath.Join(dir, base)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			candidate += ".exe"
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
 		}
-		candidate += ".exe"
-		if _, err := os.Stat(candidate); err == nil {
+	}
+	for _, base := range candidates {
+		if candidate, err := exec.LookPath(base); err == nil || errors.Is(err, exec.ErrDot) {
+			if filepath.IsAbs(candidate) {
+				return candidate, nil
+			}
+			if abs, absErr := filepath.Abs(candidate); absErr == nil {
+				return abs, nil
+			}
 			return candidate, nil
 		}
 	}
-	if candidate, err := exec.LookPath(hostBinaryName); err == nil || errors.Is(err, exec.ErrDot) {
-		if filepath.IsAbs(candidate) {
-			return candidate, nil
-		}
-		if abs, absErr := filepath.Abs(candidate); absErr == nil {
-			return abs, nil
-		}
-		return candidate, nil
-	}
-	return "", fmt.Errorf("%s not found next to %s or in PATH", hostBinaryName, self)
+	return "", fmt.Errorf("no host binary found next to %s or in PATH (tried %s)", self, strings.Join(candidates, ", "))
 }
 
 // sanitizeURL returns a log-safe version of the URL (no token).

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"arcmantle/vortex/internal/instance"
@@ -47,28 +48,37 @@ func newUILifecycle(identity instance.Identity, title, url string) *uiLifecycle 
 // windowBinaryName returns the path to the vortex GUI executable.
 // It looks next to the current executable first, then falls back to PATH.
 func windowBinaryName() string {
+	candidates := []string{"vortex"}
+	if runtime.GOOS == "windows" {
+		candidates = []string{"vortex-window", "vortex"}
+	}
+
 	self, err := resolveExecutablePath()
 	if err == nil {
 		dir := filepath.Dir(self)
-		candidate := filepath.Join(dir, "vortex")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		for _, base := range candidates {
+			candidate := filepath.Join(dir, base)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+			candidate += ".exe"
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
 		}
-		candidate += ".exe"
-		if _, err := os.Stat(candidate); err == nil {
+	}
+	for _, base := range candidates {
+		if candidate, err := lookupWindowBinary(base); err == nil || errors.Is(err, exec.ErrDot) {
+			if filepath.IsAbs(candidate) {
+				return candidate
+			}
+			if abs, absErr := filepath.Abs(candidate); absErr == nil {
+				return abs
+			}
 			return candidate
 		}
 	}
-	if candidate, err := lookupWindowBinary("vortex"); err == nil || errors.Is(err, exec.ErrDot) {
-		if filepath.IsAbs(candidate) {
-			return candidate
-		}
-		if abs, absErr := filepath.Abs(candidate); absErr == nil {
-			return abs
-		}
-		return candidate
-	}
-	return "vortex"
+	return candidates[0]
 }
 
 // Open launches the vortex GUI subprocess. Returns false if the window is

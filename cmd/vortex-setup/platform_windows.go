@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"arcmantle/vortex/internal/release"
+	"arcmantle/vortex/internal/webview"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -17,6 +19,10 @@ import (
 // platformPostInstall creates a Start Menu shortcut and registers the app
 // in Add/Remove Programs on Windows.
 func platformPostInstall(installDir string) error {
+	if err := webview.WriteWindowsIcon(filepath.Join(installDir, "vortex.ico")); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: icon install failed: %v\n", err)
+	}
+
 	if _, err := release.EnsurePathEntry(installDir); err != nil {
 		// Non-fatal: log but continue.
 		fmt.Fprintf(os.Stderr, "warning: PATH update failed: %v\n", err)
@@ -45,7 +51,7 @@ func createStartMenuShortcut(installDir string) error {
 		return err
 	}
 	shortcutPath := filepath.Join(shortcutDir, "Vortex.lnk")
-	target := filepath.Join(installDir, "vortex.exe")
+	target := filepath.Join(installDir, release.ManagedGUIBinaryName())
 
 	// Use PowerShell to create the .lnk file (avoids COM interop in Go).
 	script := fmt.Sprintf(`
@@ -61,6 +67,10 @@ $sc.Save()
 `, escape(shortcutPath), escape(target), escape(installDir), escape(filepath.Join(installDir, "vortex.ico")))
 
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: createNoWindow,
+		HideWindow:    true,
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("powershell shortcut: %w: %s", err, strings.TrimSpace(string(out)))
 	}
