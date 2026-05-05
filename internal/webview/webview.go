@@ -4,7 +4,12 @@ package webview
 
 import "context"
 
+type windowOptions struct {
+	dialog bool
+}
+
 type Controller interface {
+	Close()
 	Focus()
 	Hide()
 	Show()
@@ -13,7 +18,22 @@ type Controller interface {
 // Open opens a native webview window pointing at url.
 // It blocks until the window is closed.
 func Open(title, url string, width, height int) {
-	openWithContext(context.Background(), title, url, width, height, nil)
+	openWithContext(context.Background(), title, url, width, height, windowOptions{}, nil)
+}
+
+// OpenDialogWithContext opens a fixed-size dialog window without resize,
+// minimize, or maximize controls when supported by the platform.
+func OpenDialogWithContext(ctx context.Context, title, url string, width, height int) {
+	openWithContext(ctx, title, url, width, height, windowOptions{dialog: true}, nil)
+}
+
+// OpenDialogWithContextAndReady opens a fixed-size dialog window and reports
+// a controller once the native window exists.
+func OpenDialogWithContextAndReady(ctx context.Context, title, url string, width, height int, onReady func(Controller)) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	openWithContext(ctx, title, url, width, height, windowOptions{dialog: true}, onReady)
 }
 
 // OpenWithContext opens a native webview window and terminates it when ctx is canceled.
@@ -28,5 +48,5 @@ func OpenWithContextAndReady(ctx context.Context, title, url string, width, heig
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	openWithContext(ctx, title, url, width, height, onReady)
+	openWithContext(ctx, title, url, width, height, windowOptions{}, onReady)
 }

@@ -31,15 +31,24 @@ var (
 	procIsWindow                           = user32DLL.NewProc("IsWindow")
 	procGetWindowLongPtr                   = user32DLL.NewProc("GetWindowLongPtrW")
 	procSetWindowLongPtr                   = user32DLL.NewProc("SetWindowLongPtrW")
+	procSetWindowPos                       = user32DLL.NewProc("SetWindowPos")
 	procSetLayeredWindowAttributes         = user32DLL.NewProc("SetLayeredWindowAttributes")
 	procDwmSetWindowAttribute              = dwmapiDLL.NewProc("DwmSetWindowAttribute")
 	gwChild                        uintptr = 5
 	gwHwndNext                     uintptr = 2
 	swHide                         uintptr = 0
 	swShow                         uintptr = 5
+	gwlStyle                       uintptr = ^uintptr(15)
 	gwlExStyle                     uintptr = ^uintptr(19)
+	wsMaximizeBox                  uintptr = 0x00010000
+	wsMinimizeBox                  uintptr = 0x00020000
+	wsThickFrame                   uintptr = 0x00040000
 	wsExLayered                    uintptr = 0x00080000
 	lwaAlpha                       uintptr = 0x00000002
+	swpNoSize                      uintptr = 0x0001
+	swpNoMove                      uintptr = 0x0002
+	swpNoZOrder                    uintptr = 0x0004
+	swpFrameChanged                uintptr = 0x0020
 	dwmaUseImmersiveDarkMode               = uintptr(20)
 	dwmaUseImmersiveDarkModeLegacy         = uintptr(19)
 )
@@ -112,7 +121,18 @@ func isWindow(hwnd uintptr) bool {
 	return result != 0
 }
 
-func openWithContext(ctx context.Context, title, url string, width, height int, onReady func(Controller)) {
+func applyDialogWindowStyle(hwnd unsafe.Pointer) {
+	handle := uintptr(hwnd)
+	if handle == 0 || !isWindow(handle) {
+		return
+	}
+	style, _, _ := procGetWindowLongPtr.Call(handle, gwlStyle)
+	style &^= wsMaximizeBox | wsMinimizeBox | wsThickFrame
+	procSetWindowLongPtr.Call(handle, gwlStyle, style)
+	procSetWindowPos.Call(handle, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpFrameChanged)
+}
+
+func openWithContext(ctx context.Context, title, url string, width, height int, options windowOptions, onReady func(Controller)) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -125,6 +145,9 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 	}
 	defer releaseHost()
 	applyWindowTheme(hostWindow)
+	if options.dialog {
+		applyDialogWindowStyle(hostWindow)
+	}
 
 	w := webviewlib.NewWindow(false, hostWindow)
 	if w == nil {
@@ -147,7 +170,11 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 	controller := nativeController{w: w}
 	appReady := make(chan struct{}, 1)
 	w.SetTitle(title)
-	w.SetSize(width, height, webviewlib.HintNone)
+	var sizeHint webviewlib.Hint = webviewlib.HintNone
+	if options.dialog {
+		sizeHint = webviewlib.HintFixed
+	}
+	w.SetSize(width, height, sizeHint)
 	controller.setIcon(iconPNG)
 	if err := w.Bind("vortexAppReady", func() {
 		select {

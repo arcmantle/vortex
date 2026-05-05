@@ -17,6 +17,12 @@ func (c nativeController) setIcon(icon []byte) {
 	windowicon.Set(c.w.Window(), icon)
 }
 
+func (c nativeController) Close() {
+	c.w.Dispatch(func() {
+		c.w.Terminate()
+	})
+}
+
 func (c nativeController) Focus() {
 	c.w.Dispatch(func() {
 		windowfocus.Focus(c.w.Window())

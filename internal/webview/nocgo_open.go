@@ -7,6 +7,6 @@ import (
 	"log"
 )
 
-func openWithContext(_ context.Context, _ string, _ string, _ int, _ int, _ func(Controller)) {
+func openWithContext(_ context.Context, _ string, _ string, _ int, _ int, _ windowOptions, _ func(Controller)) {
 	log.Printf("native webview unavailable: built without cgo; rebuild with CGO_ENABLED=1")
 }

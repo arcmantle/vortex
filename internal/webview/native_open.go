@@ -11,7 +11,7 @@ import (
 	webviewlib "github.com/webview/webview_go"
 )
 
-func openWithContext(ctx context.Context, title, url string, width, height int, onReady func(Controller)) {
+func openWithContext(ctx context.Context, title, url string, width, height int, options windowOptions, onReady func(Controller)) {
 	windowfocus.ShowApp()
 	w := webviewlib.New(false)
 	if w == nil {
@@ -32,7 +32,11 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 	controller := nativeController{w: w}
 	w.SetTitle(title)
 	w.SetHtml(loadingDocument())
-	w.SetSize(width, height, webviewlib.HintNone)
+	var sizeHint webviewlib.Hint = webviewlib.HintNone
+	if options.dialog {
+		sizeHint = webviewlib.HintFixed
+	}
+	w.SetSize(width, height, sizeHint)
 	controller.setIcon(iconPNG)
 	if err := w.Bind("vortexOpenExternal", func(target string) error {
 		return OpenExternalURL(target)
