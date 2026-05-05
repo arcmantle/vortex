@@ -19,7 +19,7 @@ func runUninstall() {
 	}
 
 	// Remove binaries.
-	for _, name := range []string{"vortex", "vortex-window"} {
+	for _, name := range []string{release.ManagedHostBinaryName(), release.ManagedGUIBinaryName()} {
 		path := filepath.Join(installDir, name)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "warning: remove %s: %v\n", path, err)
