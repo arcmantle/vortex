@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"arcmantle/vortex/internal/release"
 )
@@ -43,6 +44,13 @@ func runUninstall() {
 		home, _ := os.UserHomeDir()
 		if home != "" {
 			os.RemoveAll(filepath.Join(home, ".config", "vortex"))
+		}
+	}
+
+	home, _ := os.UserHomeDir()
+	for _, path := range webviewDataCleanupTargetsForGOOS(runtime.GOOS, home) {
+		if err := os.RemoveAll(path); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: remove %s: %v\n", path, err)
 		}
 	}
 

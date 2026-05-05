@@ -149,7 +149,7 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 		applyDialogWindowStyle(hostWindow)
 	}
 
-	w := webviewlib.NewWindow(false, hostWindow)
+	w := newWindowWithConfiguredUserData(hostWindow)
 	if w == nil {
 		log.Printf("webview: failed to initialize native window")
 		return
@@ -230,6 +230,12 @@ func openWithContext(ctx context.Context, title, url string, width, height int, 
 
 	w.Run()
 	close(runDone)
+}
+
+func newWindowWithConfiguredUserData(hostWindow unsafe.Pointer) webviewlib.WebView {
+	restore := prepareWindowsWebView2UserDataEnv()
+	defer restore()
+	return webviewlib.NewWindow(false, hostWindow)
 }
 
 func createHostWindow(width, height int) (unsafe.Pointer, func(), error) {

@@ -25,7 +25,7 @@ const (
 	cleanupDeleteDelay           = 250 * time.Millisecond
 )
 
-func launchCleanupHelper(selfPath, installDir string) error {
+func launchCleanupHelper(selfPath, installDir string, extraPaths []string) error {
 	helperDir, err := os.MkdirTemp("", "vortex-uninstall-*")
 	if err != nil {
 		return fmt.Errorf("create cleanup helper dir: %w", err)
@@ -36,7 +36,9 @@ func launchCleanupHelper(selfPath, installDir string) error {
 		return fmt.Errorf("copy cleanup helper: %w", err)
 	}
 
-	cmd := exec.Command(helperPath, "--cleanup-self", strconv.Itoa(os.Getpid()), selfPath, installDir)
+	args := []string{"--cleanup-self", strconv.Itoa(os.Getpid()), selfPath, installDir}
+	args = append(args, extraPaths...)
+	cmd := exec.Command(helperPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: cleanupDetachedProcess | cleanupCreateNewProcessGroup | cleanupCreateNoWindow,
 		HideWindow:    true,
@@ -48,7 +50,7 @@ func launchCleanupHelper(selfPath, installDir string) error {
 }
 
 func runCleanupHelper(args []string) {
-	if len(args) != 3 {
+	if len(args) < 3 {
 		return
 	}
 
@@ -58,10 +60,14 @@ func runCleanupHelper(args []string) {
 	}
 	installedUninstaller := args[1]
 	installDir := args[2]
+	extraPaths := args[3:]
 
 	_ = waitForProcessExit(parentPID)
-	_ = removePathWithRetry(installedUninstaller)
-	_ = removePathWithRetry(installDir)
+	_ = removeAllWithRetry(installedUninstaller)
+	_ = removeAllWithRetry(installDir)
+	for _, path := range extraPaths {
+		_ = removeAllWithRetry(path)
+	}
 
 	selfPath, err := os.Executable()
 	if err != nil {
@@ -88,11 +94,21 @@ func waitForProcessExit(pid int) error {
 	return nil
 }
 
-func removePathWithRetry(path string) error {
+func removeAllWithRetry(path string) error {
+	if path == "" {
+		return nil
+	}
+
 	var lastErr error
 	for range cleanupDeleteAttempts {
-		lastErr = os.Remove(path)
-		if lastErr == nil || os.IsNotExist(lastErr) {
+		lastErr = os.RemoveAll(path)
+		if lastErr == nil {
+			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+				return nil
+			} else if statErr != nil {
+				lastErr = statErr
+			}
+		} else if os.IsNotExist(lastErr) {
 			return nil
 		}
 		time.Sleep(cleanupDeleteDelay)

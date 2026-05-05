@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -125,6 +127,7 @@ func performUninstall(installDir string, removeConfig bool) {
 
 	// Remove Start Menu shortcut.
 	appData := os.Getenv("APPDATA")
+	cleanupTargets := webviewDataCleanupTargets(appData)
 	if appData != "" {
 		shortcut := filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Vortex.lnk")
 		os.Remove(shortcut)
@@ -146,7 +149,7 @@ func performUninstall(installDir string, removeConfig bool) {
 	// uninstaller and the now-empty install directory after this process exits.
 	selfPath, _ := os.Executable()
 	if selfPath != "" {
-		if err := scheduleDeleteSelf(selfPath, installDir); err != nil {
+		if err := scheduleDeleteSelf(selfPath, installDir, cleanupTargets); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: schedule self-delete failed: %v\n", err)
 		}
 	}
@@ -154,8 +157,49 @@ func performUninstall(installDir string, removeConfig bool) {
 
 // scheduleDeleteSelf launches a detached helper that waits for this process to
 // exit, then removes uninstall.exe and the install directory.
-func scheduleDeleteSelf(selfPath, installDir string) error {
-	return launchCleanupHelper(selfPath, installDir)
+func scheduleDeleteSelf(selfPath, installDir string, cleanupTargets []string) error {
+	return launchCleanupHelper(selfPath, installDir, cleanupTargets)
+}
+
+func webviewDataCleanupTargets(appData string) []string {
+	if appData == "" {
+		return nil
+	}
+
+	targets := make(map[string]struct{})
+	targets[filepath.Join(appData, "Vortex", "WebView2")] = struct{}{}
+	addExecutableDataDirs := func(name string) {
+		if name == "" {
+			return
+		}
+		targets[filepath.Join(appData, name)] = struct{}{}
+		targets[filepath.Join(appData, name+".WebView2")] = struct{}{}
+	}
+
+	addExecutableDataDirs(release.ManagedGUIBinaryName())
+	addExecutableDataDirs("uninstall.exe")
+	addExecutableDataDirs(release.BinaryName("vortex-setup"))
+
+	entries, err := os.ReadDir(appData)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			lowerName := strings.ToLower(name)
+			if strings.HasPrefix(lowerName, "vortex-setup") && (strings.HasSuffix(lowerName, ".exe") || strings.HasSuffix(lowerName, ".exe.webview2")) {
+				targets[filepath.Join(appData, name)] = struct{}{}
+			}
+		}
+	}
+
+	paths := make([]string, 0, len(targets))
+	for path := range targets {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func scheduleDeleteOnReboot(path string) error {
