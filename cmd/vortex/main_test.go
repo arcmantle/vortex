@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"arcmantle/vortex/internal/release"
 )
 
 func TestIsSupportedConfigPath(t *testing.T) {
@@ -160,14 +162,16 @@ func TestWindowBinaryNameUsesAbsolutePathForRelativeLookup(t *testing.T) {
 		lookupWindowBinary = oldLookupWindowBinary
 	})
 
+	guiBinary := release.ManagedGUIBinaryName()
+
 	resolveExecutablePath = func() (string, error) {
-		return filepath.Join(tempDir, "bin", "vortex-host.exe"), nil
+		return filepath.Join(tempDir, "bin", "vortex-host"), nil
 	}
 	lookupWindowBinary = func(string) (string, error) {
-		return "vortex.exe", exec.ErrDot
+		return guiBinary, exec.ErrDot
 	}
 
-	want, err := filepath.Abs("vortex.exe")
+	want, err := filepath.Abs(guiBinary)
 	if err != nil {
 		t.Fatalf("filepath.Abs() error = %v", err)
 	}
@@ -182,7 +186,7 @@ func TestWindowBinaryNamePrefersSiblingExecutable(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("os.MkdirAll() error = %v", err)
 	}
-	sibling := filepath.Join(binDir, "vortex.exe")
+	sibling := filepath.Join(binDir, release.ManagedGUIBinaryName())
 	if err := os.WriteFile(sibling, []byte("stub"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
@@ -195,7 +199,7 @@ func TestWindowBinaryNamePrefersSiblingExecutable(t *testing.T) {
 	})
 
 	resolveExecutablePath = func() (string, error) {
-		return filepath.Join(binDir, "vortex-host.exe"), nil
+		return filepath.Join(binDir, "vortex-host"), nil
 	}
 	lookupWindowBinary = func(string) (string, error) {
 		return "", errors.New("should not be called")

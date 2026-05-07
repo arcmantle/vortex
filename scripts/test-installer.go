@@ -193,6 +193,15 @@ func uninstallVortex() {
 			removed = true
 			step("Removed " + appPath)
 		}
+		// Remove GUI binary from lib directory.
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			guiDir := filepath.Join(home, ".local", "lib", "vortex")
+			if _, err := os.Stat(guiDir); err == nil {
+				os.RemoveAll(guiDir)
+				removed = true
+			}
+		}
 	case "windows":
 		// Remove uninstall.exe from install dir.
 		uninstallExe := filepath.Join(installDir, "uninstall.exe")

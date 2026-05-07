@@ -51,7 +51,11 @@ func createStartMenuShortcut(installDir string) error {
 		return err
 	}
 	shortcutPath := filepath.Join(shortcutDir, "Vortex.lnk")
-	target := filepath.Join(installDir, release.ManagedGUIBinaryName())
+	guiInstallDir, err := release.ManagedGUIInstallDir()
+	if err != nil {
+		return fmt.Errorf("resolve GUI install dir: %w", err)
+	}
+	target := filepath.Join(guiInstallDir, release.ManagedGUIBinaryName())
 
 	// Use PowerShell to create the .lnk file (avoids COM interop in Go).
 	script := fmt.Sprintf(`
@@ -118,4 +122,14 @@ func registerUninstall(installDir string) error {
 // escape single quotes for PowerShell string literals.
 func escape(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// ensureHostSymlink creates a "vortex.exe" hardlink in installDir pointing to
+// the host binary ("vortex-host.exe") so users can type "vortex" to invoke
+// the host. On Windows we use a hardlink (no admin/dev-mode required).
+func ensureHostSymlink(installDir string) error {
+	link := filepath.Join(installDir, release.ManagedHostSymlinkName())
+	target := filepath.Join(installDir, release.ManagedHostBinaryName())
+	os.Remove(link)
+	return os.Link(target, link)
 }

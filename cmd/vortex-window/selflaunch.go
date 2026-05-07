@@ -7,11 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
 
 	"arcmantle/vortex/internal/instance"
+	"arcmantle/vortex/internal/release"
 )
 
 const (
@@ -68,40 +67,40 @@ func selfLaunchURL() (string, error) {
 	return "", fmt.Errorf("host did not become ready within %s", pollTimeout)
 }
 
-// resolveHostBinary locates the installed host binary next to this executable,
-// then falls back to PATH.
+// resolveHostBinary locates the installed host binary. It checks the managed
+// install directory first, then next to this executable, then falls back to PATH.
 func resolveHostBinary() (string, error) {
-	candidates := []string{hostBinaryName}
-	if runtime.GOOS == "windows" {
-		candidates = []string{"vortex", hostBinaryName}
-	}
+	hostBin := release.ManagedHostBinaryName()
 
-	self, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(self)
-		for _, base := range candidates {
-			candidate := filepath.Join(dir, base)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
-			candidate += ".exe"
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
-		}
-	}
-	for _, base := range candidates {
-		if candidate, err := exec.LookPath(base); err == nil || errors.Is(err, exec.ErrDot) {
-			if filepath.IsAbs(candidate) {
-				return candidate, nil
-			}
-			if abs, absErr := filepath.Abs(candidate); absErr == nil {
-				return abs, nil
-			}
+	// Check the managed install directory (e.g. ~/.local/bin/).
+	if installDir, err := release.ManagedInstallDir(); err == nil {
+		candidate := filepath.Join(installDir, hostBin)
+		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("no host binary found next to %s or in PATH (tried %s)", self, strings.Join(candidates, ", "))
+
+	// Check next to this executable.
+	self, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(self)
+		candidate := filepath.Join(dir, hostBin)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+
+	// Fall back to PATH.
+	if candidate, err := exec.LookPath(hostBin); err == nil || errors.Is(err, exec.ErrDot) {
+		if filepath.IsAbs(candidate) {
+			return candidate, nil
+		}
+		if abs, absErr := filepath.Abs(candidate); absErr == nil {
+			return abs, nil
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("no host binary found in managed dir, next to %s, or in PATH", self)
 }
 
 // sanitizeURL returns a log-safe version of the URL (no token).

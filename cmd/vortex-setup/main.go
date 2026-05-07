@@ -34,7 +34,7 @@ import (
 var Version = "dev"
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "--cleanup-self" {
+	if len(os.Args) > 1 && os.Args[1] == "--uninstall-cleanup" {
 		runCleanupHelper(os.Args[2:])
 		return
 	}
@@ -66,8 +66,14 @@ func main() {
 		return
 	}
 
+	guiInstallDir, err := release.ManagedGUIInstallDir()
+	if err != nil {
+		showError(fmt.Sprintf("resolve GUI install directory: %v", err))
+		return
+	}
+
 	vortexHostBin := filepath.Join(installDir, release.ManagedHostBinaryName())
-	vortexGUIBin := filepath.Join(installDir, release.ManagedGUIBinaryName())
+	vortexGUIBin := filepath.Join(guiInstallDir, release.ManagedGUIBinaryName())
 	alreadyInstalled := fileExists(vortexHostBin) && fileExists(vortexGUIBin)
 
 	// macOS: if already installed, skip the UI — just launch the GUI directly.
@@ -223,7 +229,8 @@ func runInstall(installDir string, alreadyInstalled bool) {
 				showError(fmt.Sprintf("Installation failed: %v", err))
 				return
 			}
-			vortexGUIBin := filepath.Join(installDir, release.ManagedGUIBinaryName())
+			guiDir, _ := release.ManagedGUIInstallDir()
+			vortexGUIBin := filepath.Join(guiDir, release.ManagedGUIBinaryName())
 			launchVortex(vortexGUIBin)
 		default:
 		}
@@ -293,13 +300,20 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 	}
 
 	progressCh <- progressUpdate{"Extracting...", 60}
+	guiInstallDir, err := release.ManagedGUIInstallDir()
+	if err != nil {
+		return fmt.Errorf("resolve GUI install directory: %w", err)
+	}
+	if err := os.MkdirAll(guiInstallDir, 0o755); err != nil {
+		return fmt.Errorf("create GUI install directory: %w", err)
+	}
 	binaries := []struct {
 		name     string
 		target   string
 		progress int
 	}{
 		{"vortex-host" + exeSuffix(), filepath.Join(installDir, release.ManagedHostBinaryName()), 70},
-		{"vortex" + exeSuffix(), filepath.Join(installDir, release.ManagedGUIBinaryName()), 80},
+		{"vortex" + exeSuffix(), filepath.Join(guiInstallDir, release.ManagedGUIBinaryName()), 80},
 	}
 
 	extractNames := make([]string, len(binaries))
@@ -324,6 +338,12 @@ func doInstall(installDir, version string, progressCh chan<- progressUpdate) err
 
 	if err := installWindowsUninstaller(installDir); err != nil {
 		return err
+	}
+
+	// On Unix, create a "vortex" symlink pointing to the host binary so
+	// users can type "vortex" instead of "vortex-host".
+	if err := ensureHostSymlink(installDir); err != nil {
+		return fmt.Errorf("create host symlink: %w", err)
 	}
 
 	// Platform-specific post-install (shortcuts, registry, PATH).
@@ -352,13 +372,21 @@ func doLocalInstall(installDir, localDir string, progressCh chan<- progressUpdat
 		return fmt.Errorf("create install directory: %w", err)
 	}
 
+	guiInstallDir, err := release.ManagedGUIInstallDir()
+	if err != nil {
+		return fmt.Errorf("resolve GUI install directory: %w", err)
+	}
+	if err := os.MkdirAll(guiInstallDir, 0o755); err != nil {
+		return fmt.Errorf("create GUI install directory: %w", err)
+	}
+
 	binaries := []struct {
 		name     string
 		target   string
 		progress int
 	}{
 		{"vortex-host", filepath.Join(installDir, release.ManagedHostBinaryName()), 30},
-		{"vortex", filepath.Join(installDir, release.ManagedGUIBinaryName()), 70},
+		{"vortex", filepath.Join(guiInstallDir, release.ManagedGUIBinaryName()), 70},
 	}
 
 	for _, b := range binaries {
@@ -384,6 +412,10 @@ func doLocalInstall(installDir, localDir string, progressCh chan<- progressUpdat
 
 	if err := installWindowsUninstaller(installDir); err != nil {
 		return err
+	}
+
+	if err := ensureHostSymlink(installDir); err != nil {
+		return fmt.Errorf("create host symlink: %w", err)
 	}
 
 	progressCh <- progressUpdate{"Configuring system...", 90}

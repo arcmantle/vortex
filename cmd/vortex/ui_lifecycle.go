@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"arcmantle/vortex/internal/instance"
+	"arcmantle/vortex/internal/release"
 )
 
 var (
@@ -46,39 +47,47 @@ func newUILifecycle(identity instance.Identity, title, url string) *uiLifecycle 
 }
 
 // windowBinaryName returns the path to the vortex GUI executable.
-// It looks next to the current executable first, then falls back to PATH.
+// The GUI is installed in a non-PATH directory (managed GUI install dir).
+// Falls back to looking next to the current executable (covers local dev
+// builds) and then PATH.
 func windowBinaryName() string {
-	candidates := []string{"vortex"}
-	if runtime.GOOS == "windows" {
-		candidates = []string{"vortex-window", "vortex"}
-	}
+	guiBinary := release.ManagedGUIBinaryName()
 
-	self, err := resolveExecutablePath()
-	if err == nil {
-		dir := filepath.Dir(self)
-		for _, base := range candidates {
-			candidate := filepath.Join(dir, base)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-			candidate += ".exe"
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-		}
-	}
-	for _, base := range candidates {
-		if candidate, err := lookupWindowBinary(base); err == nil || errors.Is(err, exec.ErrDot) {
-			if filepath.IsAbs(candidate) {
-				return candidate
-			}
-			if abs, absErr := filepath.Abs(candidate); absErr == nil {
-				return abs
-			}
+	// Check the managed GUI install directory first (production installs).
+	if guiDir, err := release.ManagedGUIInstallDir(); err == nil {
+		candidate := filepath.Join(guiDir, guiBinary)
+		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
-	return candidates[0]
+
+	// Check next to the current executable (local dev builds where host and
+	// GUI sit side-by-side in ./bin/).
+	self, err := resolveExecutablePath()
+	if err == nil {
+		dir := filepath.Dir(self)
+		candidate := filepath.Join(dir, guiBinary)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		if runtime.GOOS != "windows" {
+			// Also try with .exe suffix removed (shouldn't happen, but defensive).
+		} else {
+			// On Windows, guiBinary already has .exe suffix.
+		}
+	}
+
+	// Last resort: check PATH (unlikely for production but useful in dev).
+	if candidate, err := lookupWindowBinary(guiBinary); err == nil || errors.Is(err, exec.ErrDot) {
+		if filepath.IsAbs(candidate) {
+			return candidate
+		}
+		if abs, absErr := filepath.Abs(candidate); absErr == nil {
+			return abs
+		}
+		return candidate
+	}
+	return guiBinary
 }
 
 // Open launches the vortex GUI subprocess. Returns false if the window is

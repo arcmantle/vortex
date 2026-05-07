@@ -45,13 +45,24 @@ func Run(args []string, opts Options) error {
 	}
 
 	hostTargetPath := filepath.Join(installDir, release.ManagedHostBinaryName())
-	guiTargetPath := filepath.Join(installDir, release.ManagedGUIBinaryName())
+
+	guiInstallDir, err := release.ManagedGUIInstallDir()
+	if err != nil {
+		return err
+	}
+	if !*checkOnly {
+		if err := os.MkdirAll(guiInstallDir, 0o755); err != nil {
+			return fmt.Errorf("create GUI install dir: %w", err)
+		}
+	}
+	guiTargetPath := filepath.Join(guiInstallDir, release.ManagedGUIBinaryName())
 	currentPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate current executable: %w", err)
 	}
 	currentPath = release.CleanPath(currentPath)
-	sameInstallPath := release.SamePath(currentPath, hostTargetPath)
+	symlinkPath := filepath.Join(installDir, release.ManagedHostSymlinkName())
+	sameInstallPath := release.SamePath(currentPath, hostTargetPath) || release.SamePath(currentPath, symlinkPath)
 
 	latest, err := release.FetchLatestRelease("vortex-upgrade")
 	if err != nil {
@@ -187,6 +198,20 @@ func Run(args []string, opts Options) error {
 			}
 		}
 		fmt.Printf("Installed %s\n", b.target)
+	}
+
+	// Ensure the "vortex" alias points to the host binary (symlink on
+	// Unix, hardlink on Windows).
+	link := filepath.Join(installDir, release.ManagedHostSymlinkName())
+	os.Remove(link)
+	if runtime.GOOS == "windows" {
+		if err := os.Link(filepath.Join(installDir, release.ManagedHostBinaryName()), link); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not create host hardlink: %v\n", err)
+		}
+	} else {
+		if err := os.Symlink(release.ManagedHostBinaryName(), link); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not create host symlink: %v\n", err)
+		}
 	}
 
 	if changed, err := ensurePathEntry(installDir); err != nil {

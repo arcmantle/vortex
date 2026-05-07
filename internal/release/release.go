@@ -150,18 +150,41 @@ func BinaryName(base string) string {
 
 // ManagedHostBinaryName returns the installed host/CLI binary name.
 func ManagedHostBinaryName() string {
-	if runtime.GOOS == "windows" {
-		return BinaryName("vortex")
-	}
 	return BinaryName("vortex-host")
 }
 
-// ManagedGUIBinaryName returns the installed GUI launcher binary name.
-func ManagedGUIBinaryName() string {
-	if runtime.GOOS == "windows" {
-		return BinaryName("vortex-window")
-	}
+// ManagedHostSymlinkName returns the alias name that allows users to type
+// "vortex" to invoke the host. On Unix this is a symlink; on Windows a
+// hardlink.
+func ManagedHostSymlinkName() string {
 	return BinaryName("vortex")
+}
+
+// ManagedGUIBinaryName returns the installed GUI binary name.
+func ManagedGUIBinaryName() string {
+	return BinaryName("vortex")
+}
+
+// ManagedGUIInstallDir returns the directory where the GUI binary is installed.
+// The GUI is placed in a non-PATH directory so it doesn't shadow the host
+// alias.
+func ManagedGUIInstallDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		base := os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("resolve home directory: %w", err)
+			}
+			base = filepath.Join(home, "AppData", "Local")
+		}
+		return filepath.Join(base, "Programs", "Vortex", "gui"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, ".local", "lib", "vortex"), nil
 }
 
 // ArchiveName returns the platform-specific release archive filename for a
