@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"arcmantle/vortex/internal/uninstall"
 )
 
 func TestWebviewDataCleanupTargets(t *testing.T) {
@@ -22,14 +24,12 @@ func TestWebviewDataCleanupTargets(t *testing.T) {
 		}
 	}
 
-	targets := webviewDataCleanupTargets(appData)
+	targets := uninstall.WindowsWebviewCachePathsForAppData(appData)
 
 	for _, expected := range []string{
 		filepath.Join(appData, "Vortex", "WebView2"),
-		filepath.Join(appData, "uninstall.exe"),
-		filepath.Join(appData, "uninstall.exe.WebView2"),
-		filepath.Join(appData, "vortex-window.exe"),
-		filepath.Join(appData, "vortex-window.exe.WebView2"),
+		filepath.Join(appData, "vortex.exe"),
+		filepath.Join(appData, "vortex.exe.WebView2"),
 		filepath.Join(appData, "vortex-setup.exe"),
 		filepath.Join(appData, "vortex-setup.exe.WebView2"),
 		filepath.Join(appData, "vortex-setup-windows-arm64.exe"),

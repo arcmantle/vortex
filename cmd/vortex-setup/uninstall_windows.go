@@ -8,26 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
-	"syscall"
-	"unsafe"
 
 	"arcmantle/vortex/internal/release"
+	"arcmantle/vortex/internal/uninstall"
 	"arcmantle/vortex/internal/webview"
-
-	"golang.org/x/sys/windows/registry"
-)
-
-const (
-	moveFileDelayUntilReboot = 0x00000004
-)
-
-var (
-	kernel32DLL      = syscall.NewLazyDLL("kernel32.dll")
-	procMoveFileExW  = kernel32DLL.NewProc("MoveFileExW")
 )
 
 // runUninstall shows a webview uninstall confirmation dialog and removes
@@ -38,6 +23,8 @@ func runUninstall() {
 		showError(fmt.Sprintf("resolve install directory: %v", err))
 		return
 	}
+
+	guiInstallDir, _ := release.ManagedGUIInstallDir()
 
 	// Check --silent flag for non-interactive uninstall.
 	silent := false
@@ -51,8 +38,14 @@ func runUninstall() {
 		}
 	}
 
+	opts := uninstall.Options{
+		InstallDir:    installDir,
+		GUIInstallDir: guiInstallDir,
+		RemoveConfig:  removeConfig,
+	}
+
 	if silent {
-		performUninstall(installDir, removeConfig)
+		performUninstall(opts)
 		return
 	}
 
@@ -100,7 +93,8 @@ func runUninstall() {
 	go func() {
 		ua := <-actionCh
 		if ua.action == "confirm" {
-			performUninstall(installDir, ua.removeConfig)
+			opts.RemoveConfig = ua.removeConfig
+			performUninstall(opts)
 		}
 		closeDialog()
 	}()
@@ -118,107 +112,24 @@ type uninstallAction struct {
 	removeConfig bool
 }
 
-func performUninstall(installDir string, removeConfig bool) {
-	// Remove binaries.
-	for _, name := range []string{release.ManagedHostBinaryName(), release.ManagedGUIBinaryName(), release.BinaryName("vortex-host"), "vortex.ico"} {
-		path := filepath.Join(installDir, name)
-		os.Remove(path)
-	}
+func performUninstall(opts uninstall.Options) {
+	// Remove everything we can while running (binaries, registry, shortcuts, caches).
+	uninstall.Remove(opts)
 
-	// Remove Start Menu shortcut.
-	appData := os.Getenv("APPDATA")
-	cleanupTargets := webviewDataCleanupTargets(appData)
-	if appData != "" {
-		shortcut := filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Vortex.lnk")
-		os.Remove(shortcut)
-	}
+	// We can't delete ourselves (vortex-setup.exe) while running.
+	// Spawn a detached cleanup helper to remove the remaining locked files.
+	paths := uninstall.AllRemovalPaths(opts)
+	// Also include webview data left by setup itself.
+	paths = append(paths, uninstall.WebviewCachePaths()...)
 
-	// Remove registry entry.
-	keyPath := `Software\Microsoft\Windows\CurrentVersion\Uninstall\Vortex`
-	registry.DeleteKey(registry.CURRENT_USER, keyPath)
-
-	// Remove config if requested.
-	if removeConfig {
-		if appData != "" {
-			os.RemoveAll(filepath.Join(appData, "Vortex"))
-		}
-	}
-
-	// Note: we can't delete ourselves (uninstall.exe) while running.
-	// Launch a detached GUI helper from a temporary copy so it can remove the
-	// uninstaller and the now-empty install directory after this process exits.
 	selfPath, _ := os.Executable()
 	if selfPath != "" {
-		if err := scheduleDeleteSelf(selfPath, installDir, cleanupTargets); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: schedule self-delete failed: %v\n", err)
-		}
-	}
-}
-
-// scheduleDeleteSelf launches a detached helper that waits for this process to
-// exit, then removes uninstall.exe and the install directory.
-func scheduleDeleteSelf(selfPath, installDir string, cleanupTargets []string) error {
-	return launchCleanupHelper(selfPath, installDir, cleanupTargets)
-}
-
-func webviewDataCleanupTargets(appData string) []string {
-	if appData == "" {
-		return nil
+		paths = append(paths, selfPath)
 	}
 
-	targets := make(map[string]struct{})
-	targets[filepath.Join(appData, "Vortex", "WebView2")] = struct{}{}
-	addExecutableDataDirs := func(name string) {
-		if name == "" {
-			return
-		}
-		targets[filepath.Join(appData, name)] = struct{}{}
-		targets[filepath.Join(appData, name+".WebView2")] = struct{}{}
+	if err := uninstall.SpawnCleanupHelper(paths); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: schedule self-delete failed: %v\n", err)
 	}
-
-	addExecutableDataDirs(release.ManagedGUIBinaryName())
-	addExecutableDataDirs("uninstall.exe")
-	addExecutableDataDirs(release.BinaryName("vortex-setup"))
-
-	entries, err := os.ReadDir(appData)
-	if err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			lowerName := strings.ToLower(name)
-			if strings.HasPrefix(lowerName, "vortex-setup") && (strings.HasSuffix(lowerName, ".exe") || strings.HasSuffix(lowerName, ".exe.webview2")) {
-				targets[filepath.Join(appData, name)] = struct{}{}
-			}
-		}
-	}
-
-	paths := make([]string, 0, len(targets))
-	for path := range targets {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-func scheduleDeleteOnReboot(path string) error {
-	pathPtr, err := syscall.UTF16PtrFromString(path)
-	if err != nil {
-		return fmt.Errorf("encode path %q: %w", path, err)
-	}
-	r1, _, callErr := procMoveFileExW.Call(
-		uintptr(unsafe.Pointer(pathPtr)),
-		0,
-		uintptr(moveFileDelayUntilReboot),
-	)
-	if r1 != 0 {
-		return nil
-	}
-	if callErr != syscall.Errno(0) {
-		return callErr
-	}
-	return fmt.Errorf("MoveFileExW failed for %s", path)
 }
 
 const uninstallHTML = `<!DOCTYPE html>

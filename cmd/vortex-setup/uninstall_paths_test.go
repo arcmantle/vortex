@@ -10,12 +10,13 @@ func TestWebviewDataCleanupTargetsForGOOSDarwin(t *testing.T) {
 	home := filepath.Join("Users", "tester")
 	targets := webviewDataCleanupTargetsForGOOS("darwin", home)
 
+	const bundleID = "com.arcmantle.vortex"
 	for _, expected := range []string{
-		filepath.Join(home, "Library", "Caches", macOSBundleIdentifier),
-		filepath.Join(home, "Library", "Caches", macOSBundleIdentifier+".WebKit.Networking"),
-		filepath.Join(home, "Library", "HTTPStorages", macOSBundleIdentifier),
-		filepath.Join(home, "Library", "Saved Application State", macOSBundleIdentifier+".savedState"),
-		filepath.Join(home, "Library", "WebKit", macOSBundleIdentifier),
+		filepath.Join(home, "Library", "Caches", bundleID),
+		filepath.Join(home, "Library", "Caches", bundleID+".WebKit.Networking"),
+		filepath.Join(home, "Library", "HTTPStorages", bundleID),
+		filepath.Join(home, "Library", "Saved Application State", bundleID+".savedState"),
+		filepath.Join(home, "Library", "WebKit", bundleID),
 	} {
 		if !slices.Contains(targets, expected) {
 			t.Fatalf("expected cleanup target %q in %v", expected, targets)
