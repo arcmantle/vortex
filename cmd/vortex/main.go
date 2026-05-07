@@ -57,6 +57,14 @@ var (
 )
 
 func main() {
+	// Windows: the uninstall cleanup helper is invoked as a detached process
+	// with --uninstall-cleanup <pid> <installDir> <guiInstallDir> [...].
+	// Intercept before cobra parsing since it's not a normal subcommand.
+	if len(os.Args) > 1 && os.Args[1] == "--uninstall-cleanup" {
+		runUninstallCleanup(os.Args[2:])
+		return
+	}
+
 	prepareConsoleForCLI(os.Args[1:])
 	defer cleanupConsole()
 	root := rootCommand()

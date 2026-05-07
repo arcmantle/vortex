@@ -49,6 +49,7 @@ func rootCommand() *cobra.Command {
 	cmd.AddCommand(versionCommand())
 	cmd.AddCommand(docsCommand())
 	cmd.AddCommand(upgradeCommand())
+	cmd.AddCommand(uninstallCommand())
 
 	return cmd
 }
