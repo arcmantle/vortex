@@ -31,6 +31,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -291,13 +292,20 @@ func runBareMode(opts cliOptions) error {
 	}
 
 	// --- Named-instance check ---
-	l, first, err := instance.TryLock(identity)
+	l, first, err := tryLockInstance(identity)
 	if err != nil {
 		return fmt.Errorf("instance lock error: %w", err)
 	}
 	if !first {
 		// Singleton already running — request it to show its UI.
-		if err := instance.ShowUI(identity); err != nil {
+		if err := showInstanceUI(identity); err != nil {
+			orphaned, orphanErr := runningInstanceWithoutMetadata(identity)
+			if orphanErr != nil {
+				return fmt.Errorf("failed to inspect running instance: %w", orphanErr)
+			}
+			if orphaned || errors.Is(err, instance.ErrMetadataNotFound) {
+				return missingRegistryControlError(identity)
+			}
 			return fmt.Errorf("failed to connect to running instance: %w", err)
 		}
 		fmt.Println("Connected to running Vortex instance.")

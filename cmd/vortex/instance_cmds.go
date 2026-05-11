@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,13 @@ import (
 	"time"
 
 	"arcmantle/vortex/internal/instance"
+)
+
+var (
+	tryLockInstance      = instance.TryLock
+	getInstanceMetadata  = instance.GetMetadata
+	listInstanceMetadata = instance.ListMetadata
+	showInstanceUI       = instance.ShowUI
 )
 
 // ---------------------------------------------------------------------------
@@ -72,12 +80,19 @@ func runKillCommand(identity instance.Identity) error {
 func runShowUICommand(identity instance.Identity) error {
 	meta, err := resolveInstanceMetadata(identity)
 	if err != nil {
+		orphaned, orphanErr := runningInstanceWithoutMetadata(identity)
+		if orphanErr != nil {
+			return orphanErr
+		}
+		if orphaned {
+			return missingRegistryControlError(identity)
+		}
 		return err
 	}
 	if meta.DevMode {
 		return fmt.Errorf("Vortex instance %q is running in --dev mode and cannot open a native webview", identity.DisplayName)
 	}
-	if err := instance.ShowUI(identity); err != nil {
+	if err := showInstanceUI(identity); err != nil {
 		return err
 	}
 	fmt.Printf("Requested UI for Vortex instance %q.\n", identity.DisplayName)
@@ -87,6 +102,13 @@ func runShowUICommand(identity instance.Identity) error {
 func runHideUICommand(identity instance.Identity) error {
 	meta, err := resolveInstanceMetadata(identity)
 	if err != nil {
+		orphaned, orphanErr := runningInstanceWithoutMetadata(identity)
+		if orphanErr != nil {
+			return orphanErr
+		}
+		if orphaned {
+			return missingRegistryControlError(identity)
+		}
 		return err
 	}
 	if meta.DevMode {
@@ -177,28 +199,20 @@ type instancesJSONOutput struct {
 }
 
 func runInstancesCommandWithOptions(opts instancesCommandOptions) error {
-	instances, err := instance.ListMetadata()
+	instances, err := listInstanceMetadata()
 	if err != nil {
 		return err
-	}
-	if len(instances) == 0 {
-		if opts.jsonOutput {
-			return writeInstancesJSON(instancesJSONOutput{Instances: []instancesJSONEntry{}})
-		}
-		if opts.prune {
-			fmt.Println("Pruned 0 stale instance entries.")
-		}
-		fmt.Println("No running Vortex instances.")
-		return nil
 	}
 	sort.Slice(instances, func(i, j int) bool {
 		return instances[i].Name < instances[j].Name
 	})
 
 	entries := make([]instancesJSONEntry, 0, len(instances))
+	knownNames := make(map[string]struct{}, len(instances))
 	prunedNames := make([]string, 0)
 	shown := 0
 	for _, meta := range instances {
+		knownNames[meta.Name] = struct{}{}
 		if opts.filterName != "" && meta.Name != opts.filterName {
 			continue
 		}
@@ -241,6 +255,13 @@ func runInstancesCommandWithOptions(opts instancesCommandOptions) error {
 		shown++
 	}
 
+	orphanedEntries, err := findOrphanedListEntries(opts, knownNames)
+	if err != nil {
+		return err
+	}
+	entries = append(entries, orphanedEntries...)
+	shown += len(orphanedEntries)
+
 	if opts.jsonOutput {
 		return writeInstancesJSON(instancesJSONOutput{Pruned: prunedNames, Instances: entries})
 	}
@@ -253,6 +274,13 @@ func runInstancesCommandWithOptions(opts instancesCommandOptions) error {
 	}
 
 	if shown == 0 {
+		if opts.filterName == "" {
+			if opts.prune {
+				fmt.Println("Pruned 0 stale instance entries.")
+			}
+			fmt.Println("No running Vortex instances.")
+			return nil
+		}
 		fmt.Printf("No running Vortex instances matched %q.\n", opts.filterName)
 		return nil
 	}
@@ -371,7 +399,7 @@ func cleanupStaleInstance(meta instance.Metadata) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	l, first, err := instance.TryLock(identity)
+	l, first, err := tryLockInstance(identity)
 	if err != nil {
 		return false, err
 	}
@@ -392,7 +420,7 @@ func cleanupStaleInstance(meta instance.Metadata) (bool, error) {
 // ---------------------------------------------------------------------------
 
 func killInstanceProcesses(identity instance.Identity) (killProcessesResponse, error) {
-	meta, err := instance.GetMetadata(identity.Name)
+	meta, err := getInstanceMetadata(identity.Name)
 	if err != nil {
 		return killProcessesResponse{}, err
 	}
@@ -423,7 +451,7 @@ func killInstanceProcesses(identity instance.Identity) (killProcessesResponse, e
 func fetchInstanceTerminals(meta instance.Metadata) (instanceListResponse, error) {
 	// ListMetadata strips tokens; re-read for auth if needed.
 	if meta.Token == "" {
-		if full, err := instance.GetMetadata(meta.Name); err == nil {
+		if full, err := getInstanceMetadata(meta.Name); err == nil {
 			meta.Token = full.Token
 		}
 	}
@@ -452,7 +480,7 @@ func fetchInstanceTerminals(meta instance.Metadata) (instanceListResponse, error
 }
 
 func resolveInstanceMetadata(identity instance.Identity) (instance.Metadata, error) {
-	instances, err := instance.ListMetadata()
+	instances, err := listInstanceMetadata()
 	if err != nil {
 		return instance.Metadata{}, err
 	}
@@ -462,4 +490,75 @@ func resolveInstanceMetadata(identity instance.Identity) (instance.Metadata, err
 		}
 	}
 	return instance.Metadata{}, fmt.Errorf("no running Vortex instance named %q", identity.DisplayName)
+}
+
+func runningInstanceWithoutMetadata(identity instance.Identity) (bool, error) {
+	_, err := getInstanceMetadata(identity.Name)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, instance.ErrMetadataNotFound) {
+		return false, err
+	}
+	l, first, err := tryLockInstance(identity)
+	if err != nil {
+		return false, err
+	}
+	if first {
+		if l != nil {
+			_ = l.Close()
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+func missingRegistryControlError(identity instance.Identity) error {
+	return fmt.Errorf("running Vortex instance %q was detected, but its registry metadata is missing; terminate the orphaned process and relaunch Vortex with the current binary", identity.DisplayName)
+}
+
+func findOrphanedListEntries(opts instancesCommandOptions, knownNames map[string]struct{}) ([]instancesJSONEntry, error) {
+	candidates := make([]string, 0, 1)
+	if opts.filterName != "" {
+		if _, exists := knownNames[opts.filterName]; !exists {
+			candidates = append(candidates, opts.filterName)
+		}
+	} else if _, exists := knownNames[bareInstanceName]; !exists {
+		candidates = append(candidates, bareInstanceName)
+	}
+
+	entries := make([]instancesJSONEntry, 0, len(candidates))
+	for _, name := range candidates {
+		identity, err := instance.NewIdentity(name)
+		if err != nil {
+			return nil, err
+		}
+		orphaned, err := runningInstanceWithoutMetadata(identity)
+		if err != nil {
+			return nil, err
+		}
+		if !orphaned {
+			continue
+		}
+		entries = append(entries, orphanedInstanceEntry(identity))
+	}
+	return entries, nil
+}
+
+func orphanedInstanceEntry(identity instance.Identity) instancesJSONEntry {
+	httpPort := identity.HTTPPort
+	if identity.Name == bareInstanceName {
+		httpPort = bareDefaultPort
+	}
+	return instancesJSONEntry{
+		Name:        identity.Name,
+		DisplayName: identity.DisplayName,
+		Mode:        "unknown",
+		UI:          "unknown",
+		HTTPPort:    httpPort,
+		HandoffPort: identity.HandoffPort,
+		Reachable:   false,
+		Error:       "registry metadata is missing; this older or orphaned instance must be restarted before local control commands will work",
+		Terminals:   []instanceTerminalInfo{},
+	}
 }

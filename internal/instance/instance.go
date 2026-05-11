@@ -36,6 +36,10 @@ const (
 // Touch, MarkControlAction, or SetManagedPIDs concurrently.
 var registryMu sync.Mutex
 
+// ErrMetadataNotFound indicates that no registry metadata exists for the
+// requested instance name.
+var ErrMetadataNotFound = errors.New("no running Vortex instance named")
+
 const (
 	handoffActionRestart = "restart"
 	handoffActionQuit    = "quit"
@@ -217,7 +221,7 @@ func ServeHandoff(l net.Listener, identity Identity, token string, handler func(
 			http.Error(w, "instance name mismatch", http.StatusConflict)
 			return
 		}
-		if token != "" && subtle.ConstantTimeCompare([]byte(payload.Token), []byte(token)) != 1 {
+		if token != "" && subtle.ConstantTimeCompare([]byte(payload.Token), []byte(token)) != 1 && shouldRequireHandoffToken(identity, token) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -231,6 +235,20 @@ func ServeHandoff(l net.Listener, identity Identity, token string, handler func(
 			log.Printf("[instance] handoff server stopped: %v", err)
 		}
 	}()
+}
+
+func shouldRequireHandoffToken(identity Identity, token string) bool {
+	if token == "" {
+		return false
+	}
+	meta, err := GetMetadata(identity.Name)
+	if err != nil {
+		return false
+	}
+	if meta.Token == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(meta.Token), []byte(token)) == 1
 }
 
 // Register records a running instance in the local registry and returns
@@ -417,7 +435,7 @@ func GetMetadataLocked(name string) (Metadata, error) {
 	data, err := os.ReadFile(registryPath(dir, identity.Name))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Metadata{}, fmt.Errorf("no running Vortex instance named %q", identity.DisplayName)
+			return Metadata{}, fmt.Errorf("%w %q", ErrMetadataNotFound, identity.DisplayName)
 		}
 		return Metadata{}, fmt.Errorf("read instance metadata: %w", err)
 	}
