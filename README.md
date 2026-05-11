@@ -14,6 +14,12 @@ Download and run the installer for your platform from [GitHub Releases](https://
 
 Download the DMG from [Releases](https://github.com/arcmantle/vortex/releases/latest), open it, and drag **Vortex** to your Applications folder. On first launch, Vortex will install the required binaries automatically.
 
+If macOS says **Vortex** is damaged or blocks it with a Gatekeeper warning, remove the quarantine attribute and try again:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Vortex.app
+```
+
 **Windows:**
 
 ```powershell
